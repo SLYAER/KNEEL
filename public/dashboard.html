@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>KNEEL Dashboard</title>
+  <style>
+    body { background:#0d0d0d; color:white; font-family:sans-serif; text-align:center; }
+    button { padding:10px; margin:10px; background:#111; color:white; border:1px solid #444; }
+    input { padding:10px; margin:10px; }
+  </style>
+</head>
+<body>
+
+<h1>🔥 KNEEL CONTROL PANEL</h1>
+
+<h2>Anti Systems</h2>
+<button onclick="toggle('spam')">Toggle Spam</button>
+<button onclick="toggle('links')">Toggle Links</button>
+<button onclick="toggle('badWords')">Toggle Bad Words</button>
+
+<h2>Auto Role</h2>
+<input id="role" placeholder="Role ID">
+<button onclick="setRole()">Set Auto Role</button>
+
+<script>
+async function toggle(type) {
+  await fetch('/api/guild/YOUR_GUILD_ID/toggle/' + type, { method: 'POST' });
+  alert(type + " toggled");
+}
+
+async function setRole() {
+  const role = document.getElementById("role").value;
+  await fetch('/api/guild/YOUR_GUILD_ID', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ autoRole: role })
+  });
+  alert("Auto role updated");
+}
+</script>
+
+</body>
+</html>
