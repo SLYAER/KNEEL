@@ -3,7 +3,7 @@ const express = require("express");
 const session = require("express-session");
 
 const passport = require("./routes/auth");
-const mongo = require("./database/mongo");
+const mongo = require("./Database/mongo");
 
 const app = express();
 
