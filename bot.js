@@ -1,3 +1,5 @@
+console.log("🚀 Bot file loaded");
+console.log("TOKEN:", process.env.TOKEN ? "OK" : "MISSING");
 const { Client, GatewayIntentBits } = require("discord.js");
 require("dotenv").config();
 
