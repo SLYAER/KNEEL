@@ -1,0 +1,6 @@
+{
+  "token": "USE_ENV_TOKEN",
+  "logChannel": "PASTE_CHANNEL_ID",
+  "autoRole": "PASTE_ROLE_ID",
+  "owners": ["YOUR_USER_ID"]
+}
