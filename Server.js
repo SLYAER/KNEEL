@@ -1,3 +1,5 @@
+const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
+
 console.log("🚀 Server starting...");
 
 // 🔥 Error handlers (prevents crashes)
@@ -55,7 +57,8 @@ app.use(passport.session());
 app.use("/api", require("./routes/dashboard"));
 
 app.get("/", (req, res) => {
-  res.send("🔥 KNEEL SaaS Running");
+  res.status(200).send("OK");
+});
 });
 
 // 🔥 Start server (REQUIRED for Railway)
@@ -66,8 +69,10 @@ app.listen(PORT, () => {
 
 // 💓 Keep alive (prevents Railway kill)
 setInterval(() => {
-  console.log("💓 Alive...");
-}, 30000);
+  fetch(`http://localhost:${process.env.PORT || 3000}`)
+    .then(() => console.log("🔁 Self ping"))
+    .catch(() => console.log("⚠️ Ping failed"));
+}, 25000);
 
 // ⚠️ Graceful shutdown log
 process.on("SIGTERM", () => {
