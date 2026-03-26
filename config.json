@@ -1,6 +1,17 @@
 {
-  "token": "USE_ENV_TOKEN",
-  "logChannel": "PASTE_CHANNEL_ID",
-  "autoRole": "PASTE_ROLE_ID",
-  "owners": ["YOUR_USER_ID"]
+  "prefix": "!",
+  "defaultSettings": {
+    "autoRole": "",
+    "welcomeMessage": "👋 Welcome {user}",
+    "leaveMessage": "😢 {user} left",
+
+    "anti": {
+      "spam": true,
+      "links": true,
+      "badWords": true
+    },
+
+    "warnLimit": 3,
+    "punishment": "timeout"
+  }
 }
