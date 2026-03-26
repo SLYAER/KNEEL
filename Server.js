@@ -18,7 +18,12 @@ if (!process.env.TOKEN) {
 }
 
 // 🔥 Start Discord bot
-require("./bot");
+let botStarted = false;
+
+if (!botStarted) {
+  botStarted = true;
+  require("./bot");
+}
 
 // Imports
 const express = require("express");
