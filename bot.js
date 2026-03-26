@@ -18,3 +18,4 @@ client.on("ready", () => {
 client.login(process.env.TOKEN).catch(err => {
   console.error("❌ Login failed:", err);
 });
+require("./guards/roleDelete")(client);
