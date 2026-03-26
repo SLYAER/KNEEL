@@ -8,7 +8,11 @@ router.get("/guild/:id", async (req, res) => {
   if (!guild) {
     guild = await Guild.create({
       guildId: req.params.id,
-      anti: { spam: true, links: true, badWords: true }
+      autoRole: "",
+      welcomeMessage: "Welcome {user}",
+      anti: { spam: true, links: true, badWords: true },
+      warnLimit: 3,
+      punishment: "timeout"
     });
   }
 
@@ -16,11 +20,9 @@ router.get("/guild/:id", async (req, res) => {
 });
 
 router.post("/guild/:id/toggle/:type", async (req, res) => {
-  const { id, type } = req.params;
+  const guild = await Guild.findOne({ guildId: req.params.id });
 
-  let guild = await Guild.findOne({ guildId: id });
-
-  guild.anti[type] = !guild.anti[type];
+  guild.anti[req.params.type] = !guild.anti[req.params.type];
   await guild.save();
 
   res.json(guild);
