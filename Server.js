@@ -9,6 +9,9 @@ const app = express();
 
 mongo();
 
+app.use(express.json());
+app.use(express.static("public"));
+
 app.use(session({
   secret: "kneel-secret",
   resave: false,
@@ -21,9 +24,9 @@ app.use(passport.session());
 app.use("/api", require("./routes/dashboard"));
 
 app.get("/", (req, res) => {
-  res.send("🔥 KNEEL SaaS Dashboard Running");
+  res.send("🔥 KNEEL SaaS Running");
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🌐 Dashboard online");
+  console.log("🌐 Dashboard running");
 });
