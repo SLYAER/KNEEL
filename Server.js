@@ -1,3 +1,4 @@
+console.log("🚀 Server starting...");
 // 🔥 Error handlers (very important)
 process.on("uncaughtException", err => {
   console.error("❌ Uncaught Exception:", err);
@@ -47,3 +48,6 @@ app.get("/", (req, res) => {
 app.listen(process.env.PORT || 3000, () => {
   console.log("🌐 Dashboard running");
 });
+setInterval(() => {
+  console.log("💓 Alive...");
+}, 30000);
