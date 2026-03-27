@@ -10,17 +10,20 @@ mongoose.connect(process.env.MONGO_URI)
   .catch(err => console.log(err));
 
 // ================= MODELS =================
-const whitelistSchema = new mongoose.Schema({
+const Whitelist = mongoose.model("Whitelist", new mongoose.Schema({
   guildId: String,
   userId: String
-});
-const Whitelist = mongoose.model("Whitelist", whitelistSchema);
+}));
 
-const logSchema = new mongoose.Schema({
+const Log = mongoose.model("Log", new mongoose.Schema({
   guildId: String,
   channelId: String
-});
-const Log = mongoose.model("Log", logSchema);
+}));
+
+const Backup = mongoose.model("Backup", new mongoose.Schema({
+  guildId: String,
+  data: Object
+}));
 
 // ================= CLIENT =================
 const client = new Client({
@@ -53,7 +56,11 @@ async function isWhitelisted(guildId, userId) {
   return !!data;
 }
 
-// ================= LOG SYSTEM =================
+// ================= STORAGE =================
+const antiNuke = new Map();
+const roleBackup = new Map();
+
+// ================= LOG =================
 async function sendLog(guild, embed) {
   const data = await Log.findOne({ guildId: guild.id });
   if (!data) return;
@@ -75,37 +82,54 @@ async function stripRoles(member) {
     const botMember = member.guild.members.me;
 
     if (member.roles.highest.position >= botMember.roles.highest.position) {
-      console.log("❌ Cannot strip (role higher than bot)");
+      console.log("❌ Cannot strip (user above bot)");
       return;
     }
 
-    const roles = member.roles.cache.filter(r => r.id !== member.guild.id && r.editable);
+    const roles = member.roles.cache.filter(r =>
+      r.id !== member.guild.id && r.editable
+    );
+
     if (!roles.size) return;
 
     await member.roles.remove(roles).catch(()=>{});
 
-    const embed = new EmbedBuilder()
+    sendLog(member.guild, new EmbedBuilder()
       .setColor("Red")
       .setTitle("🚨 USER STRIPPED")
-      .setDescription(`${member.user.tag} had all roles removed`)
-      .setTimestamp();
-
-    sendLog(member.guild, embed);
+      .setDescription(`${member.user.tag}`)
+      .setTimestamp());
 
   } catch (err) {
     console.log(err);
   }
 }
 
+// ================= ANTI NUKE =================
+function trackAction(userId) {
+  if (!antiNuke.has(userId)) {
+    antiNuke.set(userId, { count: 0, time: Date.now() });
+  }
+
+  const data = antiNuke.get(userId);
+
+  if (Date.now() - data.time > 10000) {
+    data.count = 0;
+    data.time = Date.now();
+  }
+
+  data.count++;
+  return data.count;
+}
+
 // ================= EVENTS =================
 
-// ROLE UPDATE (perm abuse)
+// ROLE UPDATE
 client.on("roleUpdate", async (oldRole, newRole) => {
   const added = newRole.permissions.bitfield & ~oldRole.permissions.bitfield;
   if (!added) return;
 
-  const dangerous = dangerousPerms.some(p => (added & p) === p);
-  if (!dangerous) return;
+  if (!dangerousPerms.some(p => (added & p) === p)) return;
 
   await newRole.setPermissions(oldRole.permissions).catch(()=>{});
 
@@ -120,16 +144,12 @@ client.on("roleUpdate", async (oldRole, newRole) => {
 
   await stripRoles(attacker);
 
-  const embed = new EmbedBuilder()
-    .setColor("Orange")
-    .setTitle("⚠️ Dangerous Permission Added")
-    .addFields(
-      { name: "User", value: `${entry.executor.tag}` },
-      { name: "Role", value: `${newRole.name}` }
-    )
-    .setTimestamp();
-
-  sendLog(newRole.guild, embed);
+  if (trackAction(attacker.id) >= 3) {
+    sendLog(newRole.guild, new EmbedBuilder()
+      .setColor("DarkRed")
+      .setTitle("💀 Anti-Nuke Triggered")
+      .setDescription(attacker.user.tag));
+  }
 });
 
 // ROLE CREATE
@@ -148,12 +168,7 @@ client.on("roleCreate", async (role) => {
   if (!attacker) return;
 
   await stripRoles(attacker);
-
-  sendLog(role.guild, new EmbedBuilder()
-    .setColor("Red")
-    .setTitle("🚨 Dangerous Role Created")
-    .setDescription(`${entry.executor.tag}`)
-    .setTimestamp());
+  trackAction(attacker.id);
 });
 
 // ROLE DELETE
@@ -168,16 +183,16 @@ client.on("roleDelete", async (role) => {
   if (!attacker) return;
 
   await stripRoles(attacker);
-
-  sendLog(role.guild, new EmbedBuilder()
-    .setColor("Red")
-    .setTitle("🚨 Role Deleted")
-    .setDescription(`${entry.executor.tag}`)
-    .setTimestamp());
+  trackAction(attacker.id);
 });
 
-// MEMBER ROLE ADD
+// MEMBER UPDATE + BACKUP
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
+
+  if (!roleBackup.has(newMember.id)) {
+    roleBackup.set(newMember.id, oldMember.roles.cache.map(r => r.id));
+  }
+
   const addedRoles = newMember.roles.cache.filter(r => !oldMember.roles.cache.has(r.id));
   if (!addedRoles.size) return;
 
@@ -185,7 +200,6 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
   const entry = logs.entries.first();
   if (!entry) return;
 
-  // ✅ whitelist FIRST
   if (await isWhitelisted(newMember.guild.id, entry.executor.id)) return;
 
   for (const role of addedRoles.values()) {
@@ -198,14 +212,12 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
 
     await stripRoles(attacker);
 
-    sendLog(newMember.guild, new EmbedBuilder()
-      .setColor("Red")
-      .setTitle("🚨 Dangerous Role Given")
-      .addFields(
-        { name: "Target", value: `${newMember.user.tag}` },
-        { name: "By", value: `${entry.executor.tag}` }
-      )
-      .setTimestamp());
+    if (trackAction(attacker.id) >= 3) {
+      sendLog(newMember.guild, new EmbedBuilder()
+        .setColor("DarkRed")
+        .setTitle("💀 Anti-Nuke Triggered")
+        .setDescription(attacker.user.tag));
+    }
   }
 });
 
@@ -218,12 +230,9 @@ client.on("messageCreate", async (message) => {
 
   if (cmd === "!ping") return message.reply("🏓 Pong!");
 
-  // SET LOG CHANNEL
   if (cmd === "!setlog") {
-    if (!message.member.permissions.has("Administrator")) return;
-
     const channel = message.mentions.channels.first();
-    if (!channel) return message.reply("Mention a channel");
+    if (!channel) return message.reply("Mention channel");
 
     await Log.findOneAndUpdate(
       { guildId: message.guild.id },
@@ -231,10 +240,9 @@ client.on("messageCreate", async (message) => {
       { upsert: true }
     );
 
-    message.reply("✅ Log channel set");
+    return message.reply("✅ Log set");
   }
 
-  // WHITELIST
   if (cmd === "!whitelist") {
     if (message.author.id !== OWNER_ID) return;
 
@@ -247,19 +255,80 @@ client.on("messageCreate", async (message) => {
         {},
         { upsert: true }
       );
-      return message.reply("✅ Added");
+      return message.reply("Added");
     }
 
     if (sub === "remove") {
       await Whitelist.deleteOne({ guildId: message.guild.id, userId: user.id });
-      return message.reply("❌ Removed");
+      return message.reply("Removed");
     }
 
     if (sub === "list") {
       const data = await Whitelist.find({ guildId: message.guild.id });
-      const list = data.map(x => `<@${x.userId}>`).join("\n");
-      return message.reply(list || "Empty");
+      return message.reply(data.map(x => `<@${x.userId}>`).join("\n") || "Empty");
     }
+  }
+
+  if (cmd === "!backup") {
+    const guild = message.guild;
+
+    const data = {
+      roles: guild.roles.cache.map(r => ({
+        name: r.name,
+        color: r.color,
+        permissions: r.permissions.bitfield
+      })),
+      channels: guild.channels.cache.map(c => ({
+        name: c.name,
+        type: c.type
+      }))
+    };
+
+    await Backup.findOneAndUpdate(
+      { guildId: guild.id },
+      { data },
+      { upsert: true }
+    );
+
+    message.reply("Backup saved");
+  }
+
+  if (cmd === "!restoreserver") {
+    if (message.author.id !== OWNER_ID) return;
+
+    const backup = await Backup.findOne({ guildId: message.guild.id });
+    if (!backup) return message.reply("No backup");
+
+    const guild = message.guild;
+
+    for (const c of guild.channels.cache.values()) {
+      await c.delete().catch(()=>{});
+    }
+
+    for (const r of guild.roles.cache.values()) {
+      if (r.editable && r.id !== guild.id) await r.delete().catch(()=>{});
+    }
+
+    for (const r of backup.data.roles) {
+      await guild.roles.create(r).catch(()=>{});
+    }
+
+    for (const c of backup.data.channels) {
+      await guild.channels.create(c).catch(()=>{});
+    }
+
+    message.reply("Server restored");
+  }
+
+  if (cmd === "!restore") {
+    const user = message.mentions.members.first();
+    if (!user) return;
+
+    const backup = roleBackup.get(user.id);
+    if (!backup) return message.reply("No backup");
+
+    await user.roles.set(backup).catch(()=>{});
+    message.reply("Roles restored");
   }
 });
 
