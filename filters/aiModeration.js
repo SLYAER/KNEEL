@@ -29,3 +29,4 @@ async function isBadAI(text) {
 }
 
 module.exports = { isBadAI };
+console.log("API KEY:", process.env.OPENAI_API_KEY ? "FOUND" : "MISSING");
