@@ -23,7 +23,7 @@ const client = new Client({
   ]
 });
 
-// 🧠 AI COOLDOWN (ANTI 429)
+// 🧠 AI COOLDOWN
 const aiCooldown = new Set();
 
 function canRunAI(userId) {
@@ -40,7 +40,7 @@ client.on("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
-// 🔥 REGEX FILTERS
+// 🔥 STRONG REGEX FILTER
 const bypassRegex = [
   /f[\W_]*u[\W_]*c[\W_]*k/i,
   /b[\W_]*i[\W_]*t[\W_]*c[\W_]*h/i,
@@ -50,52 +50,60 @@ const bypassRegex = [
   /s[\W_]*h[\W_]*i[\W_]*t/i,
 ];
 
+// 🔥 WARN HANDLER
+async function handleWarn(message) {
+  const userId = message.author.id;
+
+  // apply decay before adding
+  getWarns(userId);
+
+  const count = addWarn(userId);
+
+  const warnMsg = await message.channel.send(
+    `🚫 ${message.author}, warning ${count}/3`
+  );
+
+  setTimeout(() => warnMsg.delete().catch(()=>{}), 3000);
+
+  // 🔥 AUTO MUTE
+  if (count >= 3) {
+    await message.member.timeout(10 * 60 * 1000).catch(()=>{});
+    message.channel.send(`🔇 ${message.author} muted (3 warnings).`);
+  }
+}
+
 // 🔥 MESSAGE HANDLER
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   const content = message.content.toLowerCase();
-  console.log("📩 Message:", content);
 
   // 🔴 BASIC FILTER
   if (isBadWord(message)) {
-    console.log("🚫 Basic filter triggered");
     await message.delete().catch(() => {});
-    const warn = await message.channel.send(`🚫 ${message.author}, watch your language.`);
-    setTimeout(() => warn.delete().catch(() => {}), 3000);
+    await handleWarn(message);
     return;
   }
 
-  // 🔴 BYPASS FILTER
+  // 🔴 REGEX FILTER
   if (bypassRegex.some(r => r.test(content))) {
-    console.log("🚫 Regex triggered");
     await message.delete().catch(() => {});
-    const warn = await message.channel.send(`🚫 ${message.author}, bad word detected.`);
-    setTimeout(() => warn.delete().catch(() => {}), 3000);
+    await handleWarn(message);
     return;
   }
 
-  // 🧠 AI FILTER
+  // 🧠 AI FILTER (SMART)
   try {
     const suspicious =
-      content.length > 40 &&
+      content.length > 15 &&
       /[*$@#0-9]/.test(content);
 
-    console.log("🤔 Suspicious:", suspicious);
-
     if (suspicious && canRunAI(message.author.id)) {
-      console.log("🤖 Running AI...");
-
       const bad = await isBadAI(content, message.author.id);
-
-      console.log("🧠 AI Result:", bad);
 
       if (bad) {
         await message.delete().catch(() => {});
-        const warn = await message.channel.send(
-          `🚫 ${message.author}, inappropriate content detected.`
-        );
-        setTimeout(() => warn.delete().catch(() => {}), 3000);
+        await handleWarn(message);
         return;
       }
     }
@@ -103,12 +111,20 @@ client.on("messageCreate", async (message) => {
     console.error("⚠️ AI skipped:", err.message);
   }
 
-  // ⚙️ COMMAND HANDLER
+  // ⚙️ COMMANDS
   const prefix = "!";
   if (!message.content.startsWith(prefix)) return;
 
   const args = message.content.slice(prefix.length).trim().split(/ +/);
   const cmdName = args.shift().toLowerCase();
+
+  // 🔍 BUILT-IN WARNS COMMAND
+  if (cmdName === "warns") {
+    const user = message.mentions.users.first() || message.author;
+    const count = getWarns(user.id);
+
+    return message.channel.send(`⚠️ ${user} has ${count} warnings.`);
+  }
 
   const command = commands.get(cmdName);
   if (!command) return;
