@@ -29,7 +29,7 @@ function canRunAI(userId) {
   if (aiCooldown.has(userId)) return false;
 
   aiCooldown.add(userId);
-  setTimeout(() => aiCooldown.delete(userId), 15000); // 15 sec cooldown
+  setTimeout(() => aiCooldown.delete(userId), 15000);
 
   return true;
 }
@@ -39,7 +39,7 @@ client.on("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
-// 🔥 ULTRA STRONG BYPASS REGEX
+// 🔥 REGEX FILTERS
 const bypassRegex = [
   /f[\W_]*u[\W_]*c[\W_]*k/i,
   /b[\W_]*i[\W_]*t[\W_]*c[\W_]*h/i,
@@ -56,32 +56,38 @@ client.on("messageCreate", async (message) => {
   const content = message.content.toLowerCase();
   console.log("📩 Message:", content);
 
-  // 🔴 BASIC FILTER (your existing system)
+  // 🔴 BASIC FILTER
   if (isBadWord(message)) {
+    console.log("🚫 Basic filter triggered");
     await message.delete().catch(() => {});
     const warn = await message.channel.send(`🚫 ${message.author}, watch your language.`);
     setTimeout(() => warn.delete().catch(() => {}), 3000);
     return;
   }
 
-  // 🔴 BYPASS FILTER (f*ck, f@ck, etc)
-  console.log("🚫 Regex triggered");
+  // 🔴 BYPASS FILTER
   if (bypassRegex.some(r => r.test(content))) {
+    console.log("🚫 Regex triggered");
     await message.delete().catch(() => {});
     const warn = await message.channel.send(`🚫 ${message.author}, bad word detected.`);
     setTimeout(() => warn.delete().catch(() => {}), 3000);
     return;
   }
 
-  // 🧠 AI FILTER (SMART — NO SPAM)
+  // 🧠 AI FILTER
   try {
     const suspicious =
       content.length > 40 &&
       /[*$@#0-9]/.test(content);
-    console.log("🤔 Suspicious check:", suspicious);
-    
-      if (suspicious && canRunAI(message.author.id)) {
+
+    console.log("🤔 Suspicious:", suspicious);
+
+    if (suspicious && canRunAI(message.author.id)) {
+      console.log("🤖 Running AI...");
+
       const bad = await isBadAI(content, message.author.id);
+
+      console.log("🧠 AI Result:", bad);
 
       if (bad) {
         await message.delete().catch(() => {});
