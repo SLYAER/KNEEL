@@ -1,4 +1,5 @@
 const { isBadAI } = require("./filters/aiModeration");
+const { isBadWord } = require("./filters/badWords");
 const { Client, GatewayIntentBits } = require("discord.js");
 require("dotenv").config();
 
@@ -12,9 +13,6 @@ for (const file of commandFiles) {
   const command = require(`./commands/${file}`);
   commands.set(command.name, command);
 }
-
-// 🔥 BAD WORD FILTER IMPORT
-const { isBadWord } = require("./filters/badWords");
 
 // 🔥 CREATE CLIENT
 const client = new Client({
@@ -40,6 +38,18 @@ client.on("messageCreate", async (message) => {
     const warn = await message.channel.send(`🚫 ${message.author}, watch your language.`);
     setTimeout(() => warn.delete().catch(() => {}), 3000);
     return;
+  }
+
+  // 🧠 AI MODERATION (NEW)
+  try {
+    if (message.content.length > 3 && await isBadAI(message.content)) {
+      await message.delete().catch(() => {});
+      const warn = await message.channel.send(`🚫 ${message.author}, inappropriate content detected.`);
+      setTimeout(() => warn.delete().catch(() => {}), 3000);
+      return;
+    }
+  } catch (err) {
+    console.error("AI filter failed:", err);
   }
 
   // ⚙️ COMMAND SYSTEM
