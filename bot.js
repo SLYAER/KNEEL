@@ -148,7 +148,7 @@ client.on("messageCreate", async (message) => {
     }
   }
 
-  // ===== MUSIC (FIXED FINAL) =====
+  // ===== MUSIC (FINAL FIXED) =====
   if (cmd === "!play") {
     const member = await message.guild.members.fetch(message.author.id).catch(()=>null);
     if (!member) return;
@@ -174,7 +174,8 @@ client.on("messageCreate", async (message) => {
     let res;
 
     try {
-      res = await manager.search(query, message.author);
+      // 🔥 FIX ADDED HERE
+      res = await manager.search(`ytsearch:${query}`, message.author);
     } catch {
       return message.reply("❌ Search error");
     }
