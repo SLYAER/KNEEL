@@ -1,27 +1,28 @@
 console.log("🔥 BOT FILE STARTED");
 
-// ================== IMPORTS ==================
 require("dotenv").config();
 const mongoose = require("mongoose");
-const { Client, GatewayIntentBits, PermissionsBitField } = require("discord.js");
+const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder } = require("discord.js");
 
-// ================== WHITELIST MODEL ==================
+// ================= DATABASE =================
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("🟢 Mongo connected"))
+  .catch(err => console.log(err));
+
+// ================= MODELS =================
 const whitelistSchema = new mongoose.Schema({
   guildId: String,
   userId: String
 });
 const Whitelist = mongoose.model("Whitelist", whitelistSchema);
 
-// ================== ERROR SAFETY ==================
-process.on("unhandledRejection", console.error);
-process.on("uncaughtException", console.error);
+const logSchema = new mongoose.Schema({
+  guildId: String,
+  channelId: String
+});
+const Log = mongoose.model("Log", logSchema);
 
-// ================== DATABASE ==================
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("🟢 Mongo connected"))
-  .catch(err => console.log("❌ Mongo error:", err));
-
-// ================== CLIENT ==================
+// ================= CLIENT =================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -31,7 +32,7 @@ const client = new Client({
   ]
 });
 
-// ================== CONFIG ==================
+// ================= CONFIG =================
 const OWNER_ID = "767128886990733342";
 
 const dangerousPerms = [
@@ -52,165 +53,188 @@ async function isWhitelisted(guildId, userId) {
   return !!data;
 }
 
-// ================== READY ==================
+// ================= LOG SYSTEM =================
+async function sendLog(guild, embed) {
+  const data = await Log.findOne({ guildId: guild.id });
+  if (!data) return;
+
+  const channel = guild.channels.cache.get(data.channelId);
+  if (!channel) return;
+
+  channel.send({ embeds: [embed] }).catch(()=>{});
+}
+
+// ================= READY =================
 client.on("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
-// ================== STRIP ==================
+// ================= STRIP =================
 async function stripRoles(member) {
   try {
-    console.log("⚡ Stripping:", member.user.tag);
-
     const botMember = member.guild.members.me;
 
-    console.log(
-      "Bot highest:", botMember.roles.highest.position,
-      "| User highest:", member.roles.highest.position
-    );
-
     if (member.roles.highest.position >= botMember.roles.highest.position) {
-      console.log("❌ Cannot strip (user above bot)");
+      console.log("❌ Cannot strip (role higher than bot)");
       return;
     }
 
-    const roles = member.roles.cache.filter(r =>
-      r.id !== member.guild.id && r.editable
-    );
-
+    const roles = member.roles.cache.filter(r => r.id !== member.guild.id && r.editable);
     if (!roles.size) return;
 
     await member.roles.remove(roles).catch(()=>{});
 
-    setTimeout(async () => {
-      const remaining = member.roles.cache.filter(r =>
-        r.id !== member.guild.id && r.editable
-      );
+    const embed = new EmbedBuilder()
+      .setColor("Red")
+      .setTitle("🚨 USER STRIPPED")
+      .setDescription(`${member.user.tag} had all roles removed`)
+      .setTimestamp();
 
-      if (remaining.size) {
-        await member.roles.remove(remaining).catch(()=>{});
-      }
-    }, 1500);
+    sendLog(member.guild, embed);
 
   } catch (err) {
-    console.log("❌ strip error:", err);
+    console.log(err);
   }
 }
 
-// ================== SECURITY ==================
+// ================= EVENTS =================
 
+// ROLE UPDATE (perm abuse)
 client.on("roleUpdate", async (oldRole, newRole) => {
-  try {
-    const added = newRole.permissions.bitfield & ~oldRole.permissions.bitfield;
-    if (!added) return;
+  const added = newRole.permissions.bitfield & ~oldRole.permissions.bitfield;
+  if (!added) return;
 
-    const dangerous = dangerousPerms.some(p => (added & p) === p);
-    if (!dangerous) return;
+  const dangerous = dangerousPerms.some(p => (added & p) === p);
+  if (!dangerous) return;
 
-    await newRole.setPermissions(oldRole.permissions).catch(()=>{});
+  await newRole.setPermissions(oldRole.permissions).catch(()=>{});
 
-    const logs = await newRole.guild.fetchAuditLogs({ type: 31, limit: 5 });
-    const entry = logs.entries.find(e => Date.now() - e.createdTimestamp < 5000);
+  const logs = await newRole.guild.fetchAuditLogs({ type: 31, limit: 5 });
+  const entry = logs.entries.first();
+  if (!entry) return;
 
-    if (!entry) return;
+  if (await isWhitelisted(newRole.guild.id, entry.executor.id)) return;
 
-    if (await isWhitelisted(newRole.guild.id, entry.executor.id)) return;
+  const attacker = await newRole.guild.members.fetch(entry.executor.id).catch(()=>null);
+  if (!attacker) return;
 
-    const attacker = await newRole.guild.members.fetch(entry.executor.id).catch(()=>null);
-    if (!attacker) return;
+  await stripRoles(attacker);
 
-    await stripRoles(attacker);
+  const embed = new EmbedBuilder()
+    .setColor("Orange")
+    .setTitle("⚠️ Dangerous Permission Added")
+    .addFields(
+      { name: "User", value: `${entry.executor.tag}` },
+      { name: "Role", value: `${newRole.name}` }
+    )
+    .setTimestamp();
 
-  } catch (err) {
-    console.log(err);
-  }
+  sendLog(newRole.guild, embed);
 });
 
+// ROLE CREATE
 client.on("roleCreate", async (role) => {
-  try {
-    if (!hasDangerousPerms(role.permissions)) return;
+  if (!hasDangerousPerms(role.permissions)) return;
 
-    await role.delete().catch(()=>{});
+  await role.delete().catch(()=>{});
 
-    const logs = await role.guild.fetchAuditLogs({ type: 30, limit: 5 });
-    const entry = logs.entries.find(e => Date.now() - e.createdTimestamp < 5000);
+  const logs = await role.guild.fetchAuditLogs({ type: 30, limit: 5 });
+  const entry = logs.entries.first();
+  if (!entry) return;
 
-    if (!entry) return;
+  if (await isWhitelisted(role.guild.id, entry.executor.id)) return;
 
-    if (await isWhitelisted(role.guild.id, entry.executor.id)) return;
+  const attacker = await role.guild.members.fetch(entry.executor.id).catch(()=>null);
+  if (!attacker) return;
 
-    const attacker = await role.guild.members.fetch(entry.executor.id).catch(()=>null);
-    if (!attacker) return;
+  await stripRoles(attacker);
 
-    await stripRoles(attacker);
-
-  } catch (err) {
-    console.log(err);
-  }
+  sendLog(role.guild, new EmbedBuilder()
+    .setColor("Red")
+    .setTitle("🚨 Dangerous Role Created")
+    .setDescription(`${entry.executor.tag}`)
+    .setTimestamp());
 });
 
+// ROLE DELETE
 client.on("roleDelete", async (role) => {
-  try {
-    const logs = await role.guild.fetchAuditLogs({ type: 32, limit: 5 });
-    const entry = logs.entries.find(e => Date.now() - e.createdTimestamp < 5000);
+  const logs = await role.guild.fetchAuditLogs({ type: 32, limit: 5 });
+  const entry = logs.entries.first();
+  if (!entry) return;
 
-    if (!entry) return;
+  if (await isWhitelisted(role.guild.id, entry.executor.id)) return;
 
-    if (await isWhitelisted(role.guild.id, entry.executor.id)) return;
+  const attacker = await role.guild.members.fetch(entry.executor.id).catch(()=>null);
+  if (!attacker) return;
 
-    const attacker = await role.guild.members.fetch(entry.executor.id).catch(()=>null);
+  await stripRoles(attacker);
+
+  sendLog(role.guild, new EmbedBuilder()
+    .setColor("Red")
+    .setTitle("🚨 Role Deleted")
+    .setDescription(`${entry.executor.tag}`)
+    .setTimestamp());
+});
+
+// MEMBER ROLE ADD
+client.on("guildMemberUpdate", async (oldMember, newMember) => {
+  const addedRoles = newMember.roles.cache.filter(r => !oldMember.roles.cache.has(r.id));
+  if (!addedRoles.size) return;
+
+  const logs = await newMember.guild.fetchAuditLogs({ type: 25, limit: 5 });
+  const entry = logs.entries.first();
+  if (!entry) return;
+
+  // ✅ whitelist FIRST
+  if (await isWhitelisted(newMember.guild.id, entry.executor.id)) return;
+
+  for (const role of addedRoles.values()) {
+    if (!hasDangerousPerms(role.permissions)) continue;
+
+    await newMember.roles.remove(role).catch(()=>{});
+
+    const attacker = await newMember.guild.members.fetch(entry.executor.id).catch(()=>null);
     if (!attacker) return;
 
     await stripRoles(attacker);
 
-  } catch (err) {
-    console.log(err);
+    sendLog(newMember.guild, new EmbedBuilder()
+      .setColor("Red")
+      .setTitle("🚨 Dangerous Role Given")
+      .addFields(
+        { name: "Target", value: `${newMember.user.tag}` },
+        { name: "By", value: `${entry.executor.tag}` }
+      )
+      .setTimestamp());
   }
 });
 
-client.on("guildMemberUpdate", async (oldMember, newMember) => {
-  try {
-    const addedRoles = newMember.roles.cache.filter(r => !oldMember.roles.cache.has(r.id));
-    if (!addedRoles.size) return;
-
-    for (const role of addedRoles.values()) {
-      if (!hasDangerousPerms(role.permissions)) continue;
-
-      await newMember.roles.remove(role).catch(()=>{});
-
-      const logs = await newMember.guild.fetchAuditLogs({ type: 25, limit: 5 });
-      const entry = logs.entries.find(e =>
-        e.target.id === newMember.id &&
-        Date.now() - e.createdTimestamp < 5000
-      );
-
-      if (!entry) return;
-
-      if (await isWhitelisted(newMember.guild.id, entry.executor.id)) return;
-
-      const attacker = await newMember.guild.members.fetch(entry.executor.id).catch(()=>null);
-      if (!attacker) return;
-
-      await stripRoles(attacker);
-    }
-
-  } catch (err) {
-    console.log(err);
-  }
-});
-
-// ================== COMMANDS ==================
+// ================= COMMANDS =================
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   const args = message.content.split(" ");
   const cmd = args[0];
 
-  if (cmd === "!ping") {
-    return message.reply("🏓 Pong!");
+  if (cmd === "!ping") return message.reply("🏓 Pong!");
+
+  // SET LOG CHANNEL
+  if (cmd === "!setlog") {
+    if (!message.member.permissions.has("Administrator")) return;
+
+    const channel = message.mentions.channels.first();
+    if (!channel) return message.reply("Mention a channel");
+
+    await Log.findOneAndUpdate(
+      { guildId: message.guild.id },
+      { channelId: channel.id },
+      { upsert: true }
+    );
+
+    message.reply("✅ Log channel set");
   }
 
-  // 🔥 WHITELIST COMMANDS
+  // WHITELIST
   if (cmd === "!whitelist") {
     if (message.author.id !== OWNER_ID) return;
 
@@ -218,39 +242,26 @@ client.on("messageCreate", async (message) => {
     const user = message.mentions.users.first();
 
     if (sub === "add") {
-      if (!user) return message.reply("Mention user");
-
       await Whitelist.findOneAndUpdate(
         { guildId: message.guild.id, userId: user.id },
         {},
         { upsert: true }
       );
-
-      return message.reply(`✅ Added ${user.tag}`);
+      return message.reply("✅ Added");
     }
 
     if (sub === "remove") {
-      if (!user) return message.reply("Mention user");
-
-      await Whitelist.deleteOne({
-        guildId: message.guild.id,
-        userId: user.id
-      });
-
-      return message.reply(`❌ Removed ${user.tag}`);
+      await Whitelist.deleteOne({ guildId: message.guild.id, userId: user.id });
+      return message.reply("❌ Removed");
     }
 
     if (sub === "list") {
       const data = await Whitelist.find({ guildId: message.guild.id });
-
-      if (!data.length) return message.reply("Empty");
-
       const list = data.map(x => `<@${x.userId}>`).join("\n");
-
-      return message.reply(`📜 Whitelist:\n${list}`);
+      return message.reply(list || "Empty");
     }
   }
 });
 
-// ================== LOGIN ==================
+// ================= LOGIN =================
 client.login(process.env.TOKEN);
