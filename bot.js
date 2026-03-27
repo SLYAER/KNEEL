@@ -1,7 +1,8 @@
 const { addWarn, getWarns } = require("./utils/warnSystem");
+const { setLogChannel, getLogChannel } = require("./utils/logSystem");
 const { isBadAI } = require("./filters/aiModeration");
 const { isBadWord } = require("./filters/badWords");
-const { Client, GatewayIntentBits } = require("discord.js");
+const { Client, GatewayIntentBits, PermissionsBitField } = require("discord.js");
 require("dotenv").config();
 const fs = require("fs");
 
@@ -40,7 +41,7 @@ client.on("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
-// 🔥 STRONG REGEX FILTER
+// 🔥 REGEX FILTER
 const bypassRegex = [
   /f[\W_]*u[\W_]*c[\W_]*k/i,
   /b[\W_]*i[\W_]*t[\W_]*c[\W_]*h/i,
@@ -50,13 +51,41 @@ const bypassRegex = [
   /s[\W_]*h[\W_]*i[\W_]*t/i,
 ];
 
-// 🔥 WARN HANDLER
-async function handleWarn(message) {
+// 🔥 LOG FUNCTION (DYNAMIC)
+async function sendLog(message, reason) {
+  try {
+    const channelId = getLogChannel(message.guild.id);
+    if (!channelId) return;
+
+    const logChannel = message.guild.channels.cache.get(channelId);
+    if (!logChannel) return;
+
+    const time = new Date().toLocaleString();
+
+    logChannel.send(
+`🚫 **Message Deleted**
+
+👤 User: ${message.author.tag}
+🆔 ID: ${message.author.id}
+
+💬 Message: ${message.content || "None"}
+
+📍 Channel: ${message.channel}
+⏰ Time: ${time}
+
+⚠️ Reason: ${reason}`
+    );
+
+  } catch (err) {
+    console.error("Log error:", err.message);
+  }
+}
+
+// 🔥 WARN SYSTEM
+async function handleWarn(message, reason) {
   const userId = message.author.id;
 
-  // apply decay before adding
   getWarns(userId);
-
   const count = addWarn(userId);
 
   const warnMsg = await message.channel.send(
@@ -65,7 +94,8 @@ async function handleWarn(message) {
 
   setTimeout(() => warnMsg.delete().catch(()=>{}), 3000);
 
-  // 🔥 AUTO MUTE
+  await sendLog(message, reason);
+
   if (count >= 3) {
     await message.member.timeout(10 * 60 * 1000).catch(()=>{});
     message.channel.send(`🔇 ${message.author} muted (3 warnings).`);
@@ -78,21 +108,19 @@ client.on("messageCreate", async (message) => {
 
   const content = message.content.toLowerCase();
 
-  // 🔴 BASIC FILTER
+  // 🔴 FILTERS
   if (isBadWord(message)) {
     await message.delete().catch(() => {});
-    await handleWarn(message);
+    await handleWarn(message, "Basic filter");
     return;
   }
 
-  // 🔴 REGEX FILTER
   if (bypassRegex.some(r => r.test(content))) {
     await message.delete().catch(() => {});
-    await handleWarn(message);
+    await handleWarn(message, "Regex filter");
     return;
   }
 
-  // 🧠 AI FILTER (SMART)
   try {
     const suspicious =
       content.length > 15 &&
@@ -103,7 +131,7 @@ client.on("messageCreate", async (message) => {
 
       if (bad) {
         await message.delete().catch(() => {});
-        await handleWarn(message);
+        await handleWarn(message, "AI moderation");
         return;
       }
     }
@@ -118,7 +146,21 @@ client.on("messageCreate", async (message) => {
   const args = message.content.slice(prefix.length).trim().split(/ +/);
   const cmdName = args.shift().toLowerCase();
 
-  // 🔍 BUILT-IN WARNS COMMAND
+  // 🔥 SET LOG CHANNEL COMMAND
+  if (cmdName === "setlog") {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply("❌ You need admin permission.");
+    }
+
+    const channel = message.mentions.channels.first();
+    if (!channel) return message.reply("❌ Mention a channel.");
+
+    setLogChannel(message.guild.id, channel.id);
+
+    return message.channel.send(`✅ Log channel set to ${channel}`);
+  }
+
+  // 🔍 WARNS COMMAND
   if (cmdName === "warns") {
     const user = message.mentions.users.first() || message.author;
     const count = getWarns(user.id);
