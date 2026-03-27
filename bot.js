@@ -1,4 +1,5 @@
 const { isBadAI } = require("./filters/aiModeration");
+const { isBadAI } = require("./filters/aiModeration");
 const { isBadWord } = require("./filters/badWords");
 const { Client, GatewayIntentBits } = require("discord.js");
 require("dotenv").config();
