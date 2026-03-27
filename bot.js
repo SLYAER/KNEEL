@@ -36,12 +36,11 @@ const configSchema = new mongoose.Schema({
 const Config = mongoose.model("Config", configSchema);
 
 // ===== MEMORY =====
-let whitelist = new Set();
 let backup = null;
 let restoreVotes = new Set();
 let restorePending = false;
 
-// ===== LAVALINK (YOUR URL ADDED) =====
+// ===== LAVALINK =====
 const manager = new Manager({
   nodes: [{
     host: "lavalink-production-53be.up.railway.app",
@@ -61,7 +60,6 @@ client.on("ready", () => {
   manager.init(client.user.id);
 });
 
-// Lavalink sync
 client.on("raw", d => manager.updateVoiceState(d));
 
 // ===== MESSAGE =====
@@ -77,14 +75,14 @@ client.on("messageCreate", async (message) => {
   let user = await User.findOne({ userId: message.author.id });
   if (!user) user = await User.create({ userId: message.author.id });
 
-  // ===== SET CHANNELS =====
+  // ===== CONFIG COMMANDS =====
   if (cmd === "!setlog") {
     if (!message.member.permissions.has("Administrator")) return;
     const ch = message.mentions.channels.first();
     if (!ch) return message.reply("❌ Mention channel");
     config.log = ch.id;
     await config.save();
-    return message.reply("✅ Log channel set");
+    return message.reply("✅ Log set");
   }
 
   if (cmd === "!setwelcome") {
@@ -93,7 +91,7 @@ client.on("messageCreate", async (message) => {
     if (!ch) return message.reply("❌ Mention channel");
     config.welcome = ch.id;
     await config.save();
-    return message.reply("✅ Welcome channel set");
+    return message.reply("✅ Welcome set");
   }
 
   if (cmd === "!setapprover") {
@@ -102,14 +100,14 @@ client.on("messageCreate", async (message) => {
     if (!role) return message.reply("❌ Mention role");
     config.approver = role.id;
     await config.save();
-    return message.reply("✅ Approver role set");
+    return message.reply("✅ Approver set");
   }
 
-  // ===== XP SYSTEM =====
+  // ===== XP =====
   user.xp += 10;
   await user.save();
   if (user.xp % 100 === 0) {
-    message.channel.send(`🎉 Level up (${user.xp/100})`);
+    message.channel.send(`🎉 Level ${user.xp/100}`);
   }
 
   // ===== AFK =====
@@ -128,10 +126,10 @@ client.on("messageCreate", async (message) => {
   // ===== AUTOMOD =====
   if (["fuck","shit","bitch"].some(w=>message.content.toLowerCase().includes(w))) {
     await message.delete().catch(()=>{});
-    return message.channel.send("🚫 Language not allowed");
+    return message.channel.send("🚫 Language blocked");
   }
 
-  // ===== WARN SYSTEM =====
+  // ===== WARN =====
   if (cmd === "!warn") {
     const target = message.mentions.users.first();
     if (!target) return;
@@ -150,16 +148,16 @@ client.on("messageCreate", async (message) => {
     }
   }
 
-  // ===== MUSIC (FIXED) =====
+  // ===== MUSIC (FIXED FINAL) =====
   if (cmd === "!play") {
     const member = await message.guild.members.fetch(message.author.id).catch(()=>null);
     if (!member) return;
 
     const vc = member.voice.channel;
-    if (!vc) return message.reply("Join VC first");
+    if (!vc) return message.reply("❌ Join VC");
 
     const query = args.slice(1).join(" ");
-    if (!query) return message.reply("Give song name");
+    if (!query) return message.reply("❌ Provide song");
 
     let player = manager.players.get(message.guild.id);
 
@@ -167,24 +165,35 @@ client.on("messageCreate", async (message) => {
       player = manager.create({
         guild: message.guild.id,
         voiceChannel: vc.id,
-        textChannel: message.channel.id
+        textChannel: message.channel.id,
+        selfDeafen: true
       });
       player.connect();
     }
 
-    const res = await manager.search(query, message.author);
+    let res;
 
-    if (!res || res.loadType === "NO_MATCHES") {
+    try {
+      res = await manager.search(query, message.author);
+    } catch {
+      return message.reply("❌ Search error");
+    }
+
+    if (!res || !res.tracks || res.tracks.length === 0) {
       return message.reply("❌ No results");
     }
 
-    player.queue.add(res.tracks[0]);
-
-    if (!player.playing && !player.paused) {
-      player.play();
+    if (res.loadType === "PLAYLIST_LOADED") {
+      player.queue.add(res.tracks);
+      message.reply(`📀 Playlist added`);
+    } else {
+      player.queue.add(res.tracks[0]);
+      message.reply(`🎶 ${res.tracks[0].title}`);
     }
 
-    message.reply(`🎶 Playing: ${res.tracks[0].title}`);
+    if (!player.playing && !player.paused && player.queue.size) {
+      player.play();
+    }
   }
 
   // ===== BACKUP =====
@@ -214,7 +223,7 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-// ===== BUTTON SYSTEM =====
+// ===== BUTTON =====
 client.on("interactionCreate", async (i) => {
   if (!i.isButton()) return;
 
@@ -236,7 +245,7 @@ client.on("interactionCreate", async (i) => {
         }).catch(()=>{});
       }
 
-      i.channel.send("✅ Server Restored");
+      i.channel.send("✅ Restored");
     } else {
       i.reply("Vote added");
     }
@@ -244,14 +253,14 @@ client.on("interactionCreate", async (i) => {
 
   if (i.customId === "no") {
     restorePending = false;
-    i.channel.send("❌ Restore Cancelled");
+    i.channel.send("❌ Cancelled");
   }
 });
 
-// ===== WELCOME / LEAVE =====
+// ===== JOIN / LEAVE =====
 client.on("guildMemberAdd", async (m) => {
   const config = await Config.findOne({ guildId: m.guild.id });
-  if (!config || !config.welcome) return;
+  if (!config?.welcome) return;
 
   const ch = m.guild.channels.cache.get(config.welcome);
   if (ch) ch.send(`👋 Welcome ${m.user}`);
@@ -259,7 +268,7 @@ client.on("guildMemberAdd", async (m) => {
 
 client.on("guildMemberRemove", async (m) => {
   const config = await Config.findOne({ guildId: m.guild.id });
-  if (!config || !config.welcome) return;
+  if (!config?.welcome) return;
 
   const ch = m.guild.channels.cache.get(config.welcome);
   if (ch) ch.send(`😢 ${m.user.tag} left`);
