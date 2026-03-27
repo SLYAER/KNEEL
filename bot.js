@@ -14,7 +14,7 @@ for (const file of commandFiles) {
   commands.set(command.name, command);
 }
 
-// 🔥 CREATE CLIENT
+// 🔥 CLIENT
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -23,19 +23,33 @@ const client = new Client({
   ]
 });
 
+// 🧠 AI COOLDOWN (FIXES 429)
+const aiCooldown = new Set();
+
+function canRunAI(userId) {
+  if (aiCooldown.has(userId)) return false;
+
+  aiCooldown.add(userId);
+  setTimeout(() => aiCooldown.delete(userId), 15000); // 15 sec cooldown
+
+  return true;
+}
+
 // 🔥 READY
 client.on("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
-// 🔥 STRONG REGEX (catches f*ck, f u c k, etc)
+// 🔥 STRONG REGEX (MAIN FILTER)
 const bypassRegex = /f[\W_]*u[\W_]*c[\W_]*k/i;
 
 // 🔥 MESSAGE HANDLER
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  // 🔴 BASIC WORD FILTER
+  const content = message.content.toLowerCase();
+
+  // 🔴 BASIC FILTER
   if (isBadWord(message)) {
     await message.delete().catch(() => {});
     const warn = await message.channel.send(`🚫 ${message.author}, watch your language.`);
@@ -43,35 +57,42 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // 🔴 BYPASS FILTER (f*ck etc)
-  if (bypassRegex.test(message.content)) {
+  // 🔴 BYPASS FILTER (handles f*ck etc)
+  if (bypassRegex.test(content)) {
     await message.delete().catch(() => {});
-    const warn = await message.channel.send(`🚫 ${message.author}, bypassed bad word detected.`);
+    const warn = await message.channel.send(`🚫 ${message.author}, bad word detected.`);
     setTimeout(() => warn.delete().catch(() => {}), 3000);
     return;
   }
 
-  // 🧠 AI MODERATION (FORCED RUN + DEBUG)
+  // 🧠 AI ONLY FOR COMPLEX CASES (NOT EVERY MESSAGE)
   try {
-    console.log("Checking AI for:", message.content);
+    if (
+      canRunAI(message.author.id) &&
+      (
+        content.includes("*") ||
+        content.includes("idiot") ||
+        content.includes("stupid") ||
+        content.includes("kill") ||
+        content.length > 15
+      )
+    ) {
+      const bad = await isBadAI(message.content);
 
-    const bad = await isBadAI(message.content);
-
-    console.log("AI RESULT:", bad);
-
-    if (bad) {
-      await message.delete().catch(() => {});
-      const warn = await message.channel.send(
-        `🚫 ${message.author}, inappropriate content detected.`
-      );
-      setTimeout(() => warn.delete().catch(() => {}), 3000);
-      return;
+      if (bad) {
+        await message.delete().catch(() => {});
+        const warn = await message.channel.send(
+          `🚫 ${message.author}, inappropriate content detected.`
+        );
+        setTimeout(() => warn.delete().catch(() => {}), 3000);
+        return;
+      }
     }
   } catch (err) {
-    console.error("AI failed:", err.message);
+    console.error("AI skipped:", err.message);
   }
 
-  // ⚙️ COMMAND SYSTEM
+  // ⚙️ COMMANDS
   const prefix = "!";
   if (!message.content.startsWith(prefix)) return;
 
