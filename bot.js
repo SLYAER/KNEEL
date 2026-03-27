@@ -5,7 +5,7 @@ require("dotenv").config();
 
 const fs = require("fs");
 
-// 🔥 LOAD COMMANDS
+// 🔥 COMMANDS LOAD
 const commands = new Map();
 const commandFiles = fs.readdirSync("./commands").filter(file => file.endsWith(".js"));
 
@@ -23,16 +23,19 @@ const client = new Client({
   ]
 });
 
-// 🔥 BOT READY
+// 🧠 AI COOLDOWN SYSTEM
+const aiCooldown = new Set();
+
+// 🔥 READY
 client.on("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
-// 🔥 MESSAGE HANDLER (FILTER + COMMANDS)
+// 🔥 MESSAGE HANDLER
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  // 🚨 BAD WORD FILTER
+  // 🚨 BAD WORD FILTER (FAST)
   if (isBadWord(message)) {
     await message.delete().catch(() => {});
     const warn = await message.channel.send(`🚫 ${message.author}, watch your language.`);
@@ -40,16 +43,34 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // 🧠 AI MODERATION (NEW)
+  // 🧠 AI MODERATION (SMART + RATE LIMITED)
   try {
-    if (message.content.length > 3 && await isBadAI(message.content)) {
-      await message.delete().catch(() => {});
-      const warn = await message.channel.send(`🚫 ${message.author}, inappropriate content detected.`);
-      setTimeout(() => warn.delete().catch(() => {}), 3000);
-      return;
+    if (aiCooldown.has(message.author.id)) return;
+
+    const msg = message.content.toLowerCase();
+
+    if (
+      msg.includes("*") ||
+      msg.includes("fuck") ||
+      msg.includes("shit") ||
+      msg.includes("bitch") ||
+      msg.length > 20
+    ) {
+      aiCooldown.add(message.author.id);
+
+      setTimeout(() => {
+        aiCooldown.delete(message.author.id);
+      }, 5000); // 5 sec cooldown
+
+      if (await isBadAI(message.content)) {
+        await message.delete().catch(() => {});
+        const warn = await message.channel.send(`🚫 ${message.author}, inappropriate content detected.`);
+        setTimeout(() => warn.delete().catch(() => {}), 3000);
+        return;
+      }
     }
   } catch (err) {
-    console.error("AI filter failed:", err);
+    console.error("AI skipped:", err.message);
   }
 
   // ⚙️ COMMAND SYSTEM
@@ -69,7 +90,7 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-// 🔥 LOGIN (SAFE)
+// 🔥 LOGIN
 client.login(process.env.TOKEN).catch(err => {
   console.error("❌ Login failed:", err);
 });
