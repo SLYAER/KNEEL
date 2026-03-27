@@ -4,15 +4,19 @@ const mongoose = require("mongoose");
 const ms = require("ms");
 const { Manager } = require("erela.js");
 
+// ===== SAFE HANDLERS =====
 process.on("unhandledRejection", err => console.error("ERR:", err));
 process.on("uncaughtException", err => console.error("CRASH:", err));
 
+// ===== CLIENT =====
 const client = new Client({
   intents: Object.values(GatewayIntentBits)
 });
 
-// ===== DB =====
-mongoose.connect(process.env.MONGO_URI);
+// ===== DATABASE =====
+mongoose.connect(process.env.MONGO_URI)
+.then(()=>console.log("✅ Mongo Connected"))
+.catch(()=>console.log("❌ Mongo Error"));
 
 // ===== SCHEMAS =====
 const userSchema = new mongoose.Schema({
@@ -37,18 +41,13 @@ let backup = null;
 let restoreVotes = new Set();
 let restorePending = false;
 
-// ===== READY =====
-client.on("ready", () => {
-  console.log("🔥 V6 BOT ONLINE");
-});
-
-// ===== LAVALINK =====
+// ===== LAVALINK (YOUR URL ADDED) =====
 const manager = new Manager({
   nodes: [{
-    host: "lava.link",
-    port: 80,
+    host: "lavalink-production-53be.up.railway.app",
+    port: 443,
     password: "youshallnotpass",
-    secure: false
+    secure: true
   }],
   send(id, payload) {
     const guild = client.guilds.cache.get(id);
@@ -56,8 +55,14 @@ const manager = new Manager({
   }
 });
 
+// ===== READY =====
+client.on("ready", () => {
+  console.log("🔥 FINAL GOD BOT ONLINE");
+  manager.init(client.user.id);
+});
+
+// Lavalink sync
 client.on("raw", d => manager.updateVoiceState(d));
-client.once("ready", () => manager.init(client.user.id));
 
 // ===== MESSAGE =====
 client.on("messageCreate", async (message) => {
@@ -72,14 +77,14 @@ client.on("messageCreate", async (message) => {
   let user = await User.findOne({ userId: message.author.id });
   if (!user) user = await User.create({ userId: message.author.id });
 
-  // ===== SETUP =====
+  // ===== SET CHANNELS =====
   if (cmd === "!setlog") {
     if (!message.member.permissions.has("Administrator")) return;
     const ch = message.mentions.channels.first();
     if (!ch) return message.reply("❌ Mention channel");
     config.log = ch.id;
     await config.save();
-    return message.reply("✅ Log set");
+    return message.reply("✅ Log channel set");
   }
 
   if (cmd === "!setwelcome") {
@@ -88,7 +93,7 @@ client.on("messageCreate", async (message) => {
     if (!ch) return message.reply("❌ Mention channel");
     config.welcome = ch.id;
     await config.save();
-    return message.reply("✅ Welcome set");
+    return message.reply("✅ Welcome channel set");
   }
 
   if (cmd === "!setapprover") {
@@ -97,13 +102,12 @@ client.on("messageCreate", async (message) => {
     if (!role) return message.reply("❌ Mention role");
     config.approver = role.id;
     await config.save();
-    return message.reply("✅ Approver set");
+    return message.reply("✅ Approver role set");
   }
 
-  // ===== XP =====
+  // ===== XP SYSTEM =====
   user.xp += 10;
   await user.save();
-
   if (user.xp % 100 === 0) {
     message.channel.send(`🎉 Level up (${user.xp/100})`);
   }
@@ -124,10 +128,10 @@ client.on("messageCreate", async (message) => {
   // ===== AUTOMOD =====
   if (["fuck","shit","bitch"].some(w=>message.content.toLowerCase().includes(w))) {
     await message.delete().catch(()=>{});
-    return message.channel.send("🚫 Language");
+    return message.channel.send("🚫 Language not allowed");
   }
 
-  // ===== WARN =====
+  // ===== WARN SYSTEM =====
   if (cmd === "!warn") {
     const target = message.mentions.users.first();
     if (!target) return;
@@ -152,10 +156,10 @@ client.on("messageCreate", async (message) => {
     if (!member) return;
 
     const vc = member.voice.channel;
-    if (!vc) return message.reply("Join VC");
+    if (!vc) return message.reply("Join VC first");
 
     const query = args.slice(1).join(" ");
-    if (!query) return message.reply("Give song");
+    if (!query) return message.reply("Give song name");
 
     let player = manager.players.get(message.guild.id);
 
@@ -171,24 +175,32 @@ client.on("messageCreate", async (message) => {
     const res = await manager.search(query, message.author);
 
     if (!res || res.loadType === "NO_MATCHES") {
-      return message.reply("No results");
+      return message.reply("❌ No results");
     }
 
     player.queue.add(res.tracks[0]);
-    if (!player.playing) player.play();
+
+    if (!player.playing && !player.paused) {
+      player.play();
+    }
+
+    message.reply(`🎶 Playing: ${res.tracks[0].title}`);
   }
 
   // ===== BACKUP =====
   if (cmd === "!backup") {
     backup = {
-      roles: message.guild.roles.cache.map(r=>({name:r.name, perms:r.permissions.bitfield}))
+      roles: message.guild.roles.cache.map(r=>({
+        name: r.name,
+        perms: r.permissions.bitfield
+      }))
     };
     message.reply("💾 Backup saved");
   }
 
   // ===== RESTORE =====
   if (cmd === "!restore") {
-    if (!backup) return message.reply("No backup");
+    if (!backup) return message.reply("❌ No backup");
 
     restoreVotes.clear();
     restorePending = true;
@@ -202,7 +214,7 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-// ===== BUTTON =====
+// ===== BUTTON SYSTEM =====
 client.on("interactionCreate", async (i) => {
   if (!i.isButton()) return;
 
@@ -218,10 +230,13 @@ client.on("interactionCreate", async (i) => {
       restorePending = false;
 
       for (const r of backup.roles) {
-        await i.guild.roles.create({ name: r.name, permissions: r.perms }).catch(()=>{});
+        await i.guild.roles.create({
+          name: r.name,
+          permissions: r.perms
+        }).catch(()=>{});
       }
 
-      i.channel.send("✅ Restored");
+      i.channel.send("✅ Server Restored");
     } else {
       i.reply("Vote added");
     }
@@ -229,11 +244,11 @@ client.on("interactionCreate", async (i) => {
 
   if (i.customId === "no") {
     restorePending = false;
-    i.channel.send("❌ Cancelled");
+    i.channel.send("❌ Restore Cancelled");
   }
 });
 
-// ===== WELCOME =====
+// ===== WELCOME / LEAVE =====
 client.on("guildMemberAdd", async (m) => {
   const config = await Config.findOne({ guildId: m.guild.id });
   if (!config || !config.welcome) return;
