@@ -14,6 +14,7 @@ const {
   joinVoiceChannel,
   createAudioPlayer,
   createAudioResource,
+  AudioPlayerStatus
 } = require("@discordjs/voice");
 
 const play = require("play-dl");
@@ -41,9 +42,41 @@ let restoreVotes = new Set();
 let restorePending = false;
 let approvedRoleId = null;
 
-// ===== MUSIC =====
-const player = createAudioPlayer();
-let connection;
+// ===== MUSIC SYSTEM V2 =====
+const queue = new Map();
+
+async function playSong(guild, song) {
+  const serverQueue = queue.get(guild.id);
+  if (!song) {
+    serverQueue.connection.destroy();
+    queue.delete(guild.id);
+    return;
+  }
+
+  const stream = await play.stream(song.url, {
+    discordPlayerCompatibility: true
+  });
+
+  const resource = createAudioResource(stream.stream, {
+    inputType: stream.type,
+    inlineVolume: true
+  });
+
+  const player = serverQueue.player;
+  player.play(resource);
+  resource.volume.setVolume(1);
+
+  player.once(AudioPlayerStatus.Idle, () => {
+    if (serverQueue.loop) {
+      playSong(guild, song);
+    } else {
+      serverQueue.songs.shift();
+      playSong(guild, serverQueue.songs[0]);
+    }
+  });
+
+  player.on("error", console.error);
+}
 
 // ===== READY =====
 client.once("ready", () => {
@@ -70,11 +103,9 @@ client.on("messageCreate", async (message) => {
 
     // ===== WHITELIST =====
     if (cmd === "!whitelist") {
-      if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
       const user = message.mentions.users.first();
-      if (!user) return message.reply("Mention user");
       whitelist.add(user.id);
-      message.reply(`✅ Whitelisted ${user.tag}`);
+      message.reply("✅ Whitelisted");
     }
 
     if (cmd === "!unwhitelist") {
@@ -86,15 +117,12 @@ client.on("messageCreate", async (message) => {
     // ===== APPROVAL ROLE =====
     if (cmd === "!setapprovalrole") {
       const role = message.mentions.roles.first();
-      if (!role) return;
       approvedRoleId = role.id;
       message.reply("✅ Approval role set");
     }
 
     // ===== BACKUP =====
     if (cmd === "!backup") {
-      if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
-
       backupData = {
         roles: message.guild.roles.cache.map(r => ({
           name: r.name,
@@ -111,77 +139,109 @@ client.on("messageCreate", async (message) => {
 
     // ===== RESTORE =====
     if (cmd === "!restoreserver") {
-      if (!backupData.roles) return message.reply("❌ No backup");
+      if (!backupData.roles) return message.reply("No backup");
 
       restorePending = true;
       restoreVotes.clear();
 
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("approve_restore")
-          .setLabel("Approve Restore")
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId("deny_restore")
-          .setLabel("Deny")
-          .setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId("approve_restore").setLabel("Approve").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId("deny_restore").setLabel("Cancel").setStyle(ButtonStyle.Danger)
       );
 
       message.channel.send({
-        content: "⚠️ Restore requires 2 approvals",
-        components: [row],
+        content: "⚠️ Need 2 approvals",
+        components: [row]
       });
     }
 
-    // ===== OVERRIDE =====
     if (cmd === "!override") {
-      if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
       restorePending = false;
-      message.reply("🚨 Emergency override used");
+      message.reply("🚨 Override used");
     }
 
     // ================= MUSIC =================
 
     if (cmd === "!play") {
       const query = args.slice(1).join(" ");
-      if (!query) return message.reply("❌ Provide song");
+      if (!query) return message.reply("Provide song");
 
       const vc = message.member.voice.channel;
-      if (!vc) return message.reply("❌ Join VC first");
+      if (!vc) return message.reply("Join VC");
 
-      connection = joinVoiceChannel({
-        channelId: vc.id,
-        guildId: message.guild.id,
-        adapterCreator: message.guild.voiceAdapterCreator,
-      });
+      let serverQueue = queue.get(message.guild.id);
 
-      const result = await play.search(query, { limit: 1 });
-      if (!result.length) return message.reply("❌ No results");
+      const search = await play.search(query, { limit: 1 });
+      if (!search.length) return message.reply("No results");
 
-      const stream = await play.stream(result[0].url);
+      const song = {
+        title: search[0].title,
+        url: search[0].url
+      };
 
-      const resource = createAudioResource(stream.stream, {
-        inputType: stream.type,
-      });
+      if (!serverQueue) {
+        const connection = joinVoiceChannel({
+          channelId: vc.id,
+          guildId: message.guild.id,
+          adapterCreator: message.guild.voiceAdapterCreator,
+        });
 
-      player.play(resource);
-      connection.subscribe(player);
+        const player = createAudioPlayer();
 
-      message.reply(`🎶 Playing: ${result[0].title}`);
+        serverQueue = {
+          connection,
+          player,
+          songs: [],
+          loop: false
+        };
+
+        queue.set(message.guild.id, serverQueue);
+        serverQueue.songs.push(song);
+
+        connection.subscribe(player);
+        playSong(message.guild, serverQueue.songs[0]);
+
+        return message.reply(`🎶 Playing: ${song.title}`);
+      }
+
+      serverQueue.songs.push(song);
+      message.reply(`➕ Added: ${song.title}`);
+    }
+
+    if (cmd === "!skip") {
+      const serverQueue = queue.get(message.guild.id);
+      if (!serverQueue) return;
+
+      serverQueue.songs.shift();
+      playSong(message.guild, serverQueue.songs[0]);
+      message.reply("⏭ Skipped");
+    }
+
+    if (cmd === "!loop") {
+      const serverQueue = queue.get(message.guild.id);
+      if (!serverQueue) return;
+
+      serverQueue.loop = !serverQueue.loop;
+      message.reply(`🔁 Loop: ${serverQueue.loop}`);
     }
 
     if (cmd === "!stop") {
-      if (connection) {
-        connection.destroy();
-        message.reply("⏹ Stopped");
-      }
+      const serverQueue = queue.get(message.guild.id);
+      if (!serverQueue) return;
+
+      serverQueue.songs = [];
+      serverQueue.connection.destroy();
+      queue.delete(message.guild.id);
+
+      message.reply("⏹ Stopped");
     }
 
-    if (cmd === "!leave") {
-      if (connection) {
-        connection.destroy();
-        message.reply("👋 Left VC");
-      }
+    if (cmd === "!queue") {
+      const serverQueue = queue.get(message.guild.id);
+      if (!serverQueue) return message.reply("No queue");
+
+      const list = serverQueue.songs.map((s, i) => `${i+1}. ${s.title}`).join("\n");
+      message.reply(`📜 Queue:\n${list}`);
     }
 
   } catch (err) {
@@ -197,7 +257,7 @@ client.on("interactionCreate", async (i) => {
     if (!restorePending) return;
 
     if (approvedRoleId && !i.member.roles.cache.has(approvedRoleId))
-      return i.reply({ content: "❌ No permission", ephemeral: true });
+      return i.reply({ content: "No permission", ephemeral: true });
 
     restoreVotes.add(i.user.id);
 
@@ -208,95 +268,43 @@ client.on("interactionCreate", async (i) => {
         await i.guild.roles.create({
           name: role.name,
           permissions: role.perms
-        }).catch(() => {});
+        }).catch(()=>{});
       }
 
-      i.channel.send("✅ Server restored");
+      i.channel.send("✅ Restored");
     } else {
-      i.reply("✅ Vote added");
+      i.reply("Vote added");
     }
   }
 
   if (i.customId === "deny_restore") {
     restorePending = false;
-    i.channel.send("❌ Restore cancelled");
+    i.channel.send("❌ Cancelled");
   }
 });
 
 // ===== ANTI ROLE ADD =====
 client.on("guildMemberUpdate", async (oldM, newM) => {
-  try {
-    const added = newM.roles.cache.filter(r => !oldM.roles.cache.has(r.id));
-    if (!added.size) return;
+  const added = newM.roles.cache.filter(r => !oldM.roles.cache.has(r.id));
+  if (!added.size) return;
 
-    const logs = await newM.guild.fetchAuditLogs({
-      limit: 1,
-      type: AuditLogEvent.MemberRoleUpdate,
-    });
+  const logs = await newM.guild.fetchAuditLogs({
+    limit: 1,
+    type: AuditLogEvent.MemberRoleUpdate
+  });
 
-    const entry = logs.entries.first();
-    if (!entry) return;
+  const entry = logs.entries.first();
+  if (!entry) return;
 
-    const executor = entry.executor;
-    if (whitelist.has(executor.id)) return;
+  const executor = entry.executor;
+  if (whitelist.has(executor.id)) return;
 
-    const bot = newM.guild.members.me;
+  const bot = newM.guild.members.me;
 
-    if (bot.roles.highest.position > newM.roles.highest.position) {
-      await newM.roles.set([]);
-    }
-
-    for (const r of added.values()) {
-      if (bot.roles.highest.position > r.position) {
-        await newM.roles.remove(r).catch(() => {});
-      }
-    }
-
-    log(newM.guild, `🚨 Role abuse by ${executor.tag}`);
-  } catch {}
-});
-
-// ===== ANTI ROLE DELETE =====
-client.on("roleDelete", async (role) => {
-  try {
-    const logs = await role.guild.fetchAuditLogs({
-      limit: 1,
-      type: AuditLogEvent.RoleDelete,
-    });
-
-    const entry = logs.entries.first();
-    if (!entry) return;
-
-    const executor = entry.executor;
-    if (whitelist.has(executor.id)) return;
-
-    const member = role.guild.members.cache.get(executor.id);
-    const bot = role.guild.members.me;
-
-    if (member && bot.roles.highest.position > member.roles.highest.position) {
-      await member.roles.set([]).catch(() => {});
-    }
-
-    log(role.guild, `🚨 Role deleted by ${executor.tag}`);
-  } catch {}
-});
-
-// ===== ANTI ADMIN PERM =====
-client.on("roleUpdate", async (oldR, newR) => {
-  if (
-    !oldR.permissions.has(PermissionsBitField.Flags.Administrator) &&
-    newR.permissions.has(PermissionsBitField.Flags.Administrator)
-  ) {
-    await newR.setPermissions(0);
+  if (bot.roles.highest.position > newM.roles.highest.position) {
+    await newM.roles.set([]);
   }
 });
-
-// ===== LOG =====
-function log(guild, msg) {
-  if (!logChannelId) return;
-  const ch = guild.channels.cache.get(logChannelId);
-  if (ch) ch.send(msg);
-}
 
 // ===== LOGIN =====
 client.login(process.env.TOKEN);
