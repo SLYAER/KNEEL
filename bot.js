@@ -1,7 +1,7 @@
 console.log("🔥 BOT FILE STARTED");
 
 // ================== IMPORTS ==================
-const { addWarn, getWarns, resetWarns } = require("./utils/warnSystem");
+const { addWarn, resetWarns } = require("./utils/warnSystem");
 const { isBadWord } = require("./filters/badWords");
 
 const LogConfig = require("./models/logConfig");
@@ -42,6 +42,7 @@ const dangerousPerms = [
   PermissionsBitField.Flags.ManageGuild
 ];
 
+// 👉 PUT YOUR ID HERE
 const WHITELIST = ["767128886990733342"];
 
 function hasDangerousPerms(permissions) {
@@ -66,14 +67,31 @@ async function sendLog(guild, text) {
   logChannel.send(text).catch(()=>{});
 }
 
-// ================== HELPER ==================
+// ================== 🔥 STRIP FUNCTION (FIXED) ==================
 async function stripRoles(member) {
-  const removableRoles = member.roles.cache.filter(r =>
-    r.id !== member.guild.id &&
-    r.editable
-  );
+  try {
+    // remove admin roles first
+    const dangerousRoles = member.roles.cache.filter(r =>
+      r.permissions.has(PermissionsBitField.Flags.Administrator) &&
+      r.editable
+    );
 
-  await member.roles.remove(removableRoles).catch(()=>{});
+    await member.roles.remove(dangerousRoles).catch(()=>{});
+
+    // wait so discord updates perms
+    await new Promise(res => setTimeout(res, 1000));
+
+    // remove remaining roles
+    const removableRoles = member.roles.cache.filter(r =>
+      r.id !== member.guild.id &&
+      r.editable
+    );
+
+    await member.roles.remove(removableRoles).catch(()=>{});
+
+  } catch (err) {
+    console.log("stripRoles error:", err);
+  }
 }
 
 // ================== SECURITY EVENTS ==================
@@ -101,7 +119,7 @@ client.on("roleUpdate", async (oldRole, newRole) => {
 
     await stripRoles(member);
 
-    sendLog(newRole.guild, `🚫 ${entry.executor.tag} tried to add dangerous perms`);
+    sendLog(newRole.guild, `🚫 ${entry.executor.tag} tried to add admin perms`);
   } catch (err) {
     console.log("roleUpdate error:", err);
   }
@@ -153,7 +171,7 @@ client.on("roleCreate", async (role) => {
   }
 });
 
-// 🚫 ROLE GIVE (FIXED VERSION)
+// 🚫 ROLE GIVE (FINAL FIX)
 const recentActions = new Map();
 
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
@@ -198,13 +216,12 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
   }
 });
 
-// ================== MESSAGE ==================
+// ================== COMMANDS ==================
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   const content = message.content.toLowerCase();
 
-  // 🔴 BAD WORD
   if (isBadWord(message)) {
     await message.delete().catch(()=>{});
     addWarn(message.author.id);
@@ -261,31 +278,8 @@ client.on("messageCreate", async (message) => {
     await message.channel.bulkDelete(amount, true);
   }
 
-  if (cmd === "afk") {
-    const reason = args.join(" ");
-    await AFK.findOneAndUpdate(
-      { userId: message.author.id },
-      { reason, time: Date.now() },
-      { upsert: true }
-    );
-    message.channel.send("AFK set");
-  }
-
-  if (cmd === "setspam") {
-    const limit = parseInt(args[0]);
-    const interval = ms(args[1]);
-
-    await SpamConfig.findOneAndUpdate(
-      { guildId: message.guild.id },
-      { limit, interval },
-      { upsert: true }
-    );
-
-    message.channel.send("Spam updated");
-  }
-
   if (cmd === "help") {
-    message.channel.send("Commands: warn, clearwarn, mute, purge, afk, setspam");
+    message.channel.send("Commands: warn, clearwarn, mute, purge");
   }
 });
 
