@@ -35,29 +35,35 @@ client.on("ready", () => {
 
 // 🔥 GET LOG CHANNEL
 async function getLogChannel(guild) {
-  const data = await LogConfig.findOne({ guildId: guild.id });
-  if (!data) return null;
-  return guild.channels.cache.get(data.logChannelId);
+  try {
+    const data = await LogConfig.findOne({ guildId: guild.id });
+    if (!data) return null;
+    return guild.channels.cache.get(data.logChannelId);
+  } catch {
+    return null;
+  }
 }
 
 // 🔥 SEND LOG
 async function sendLog(message, action, reason) {
-  const logChannel = await getLogChannel(message.guild);
-  if (!logChannel) return;
+  try {
+    const logChannel = await getLogChannel(message.guild);
+    if (!logChannel) return;
 
-  const embed = new EmbedBuilder()
-    .setTitle("📜 Moderation Log")
-    .setColor("Red")
-    .addFields(
-      { name: "Action", value: action },
-      { name: "User", value: message.author.tag },
-      { name: "Channel", value: `${message.channel}` },
-      { name: "Reason", value: reason || "None" },
-      { name: "Message", value: message.content || "None" }
-    )
-    .setTimestamp();
+    const embed = new EmbedBuilder()
+      .setTitle("📜 Moderation Log")
+      .setColor("Red")
+      .addFields(
+        { name: "Action", value: action },
+        { name: "User", value: message.author.tag },
+        { name: "Channel", value: `${message.channel}` },
+        { name: "Reason", value: reason || "None" },
+        { name: "Message", value: message.content || "None" }
+      )
+      .setTimestamp();
 
-  await logChannel.send({ embeds: [embed] });
+    await logChannel.send({ embeds: [embed] });
+  } catch {}
 }
 
 // 🔥 REGEX FILTER
@@ -105,11 +111,10 @@ client.on("messageCreate", async (message) => {
   if (timestamps.length > config.limit) {
     await message.delete().catch(()=>{});
 
-    getWarns(message.author.id);
     const count = addWarn(message.author.id);
 
     message.channel.send(`🚫 ${message.author} spamming (${count}/3)`);
-    await sendLog(message, "Spam", `Exceeded ${config.limit} messages in ${Math.floor(config.interval/1000)}s`);
+    await sendLog(message, "Spam", "Too many messages");
     return;
   }
 
@@ -117,7 +122,6 @@ client.on("messageCreate", async (message) => {
   if (isBadWord(message) || bypassRegex.some(r => r.test(content))) {
     await message.delete().catch(()=>{});
 
-    getWarns(message.author.id);
     const count = addWarn(message.author.id);
 
     message.channel.send(`🚫 ${message.author} warning ${count}/3`);
@@ -133,8 +137,12 @@ client.on("messageCreate", async (message) => {
 
   // 🔧 SET LOG
   if (cmd === "setlog") {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return message.reply("❌ Admin only");
+    }
+
     const channel = message.mentions.channels.first();
-    if (!channel) return;
+    if (!channel) return message.reply("❌ Mention channel");
 
     await LogConfig.findOneAndUpdate(
       { guildId: message.guild.id },
@@ -150,11 +158,10 @@ client.on("messageCreate", async (message) => {
     const target = message.mentions.members.first();
     if (!target) return;
 
-    getWarns(target.id);
     const count = addWarn(target.id);
 
     message.channel.send(`⚠️ ${target.user} warned (${count}/3)`);
-    await sendLog(message, "Warn", `Target: ${target.user.tag}`);
+    await sendLog(message, "Warn", target.user.tag);
   }
 
   // 🧹 CLEAR WARN
@@ -164,33 +171,34 @@ client.on("messageCreate", async (message) => {
 
     resetWarns(target.id);
     message.channel.send("✅ Cleared warns");
+    await sendLog(message, "Clear Warn", target.user.tag);
   }
 
-  // 🔇 MUTE (WITH ROLE RESTORE)
+  // 🔇 MUTE
   if (cmd === "mute") {
     const target = message.mentions.members.first();
-    if (!target) return message.reply("❌ Mention user");
+    if (!target) return;
 
     const duration = ms(args[0]);
-    if (!duration) return message.reply("❌ Example: !mute @user 10m");
+    if (!duration) return;
 
     const mutedRole = message.guild.roles.cache.find(r => r.name === "Muted");
-    if (!mutedRole) return message.reply("❌ Create 'Muted' role");
+    if (!mutedRole) return message.reply("Create Muted role");
 
-    const rolesToSave = target.roles.cache
+    const roles = target.roles.cache
       .filter(r => r.id !== message.guild.id)
       .map(r => r.id);
 
     await RoleBackup.findOneAndUpdate(
       { userId: target.id, guildId: message.guild.id },
-      { roles: rolesToSave },
+      { roles },
       { upsert: true }
     );
 
     await target.roles.set([mutedRole]);
 
-    message.channel.send(`🔇 ${target.user.tag} muted for ${args[0]}`);
-    await sendLog(message, "Mute", `Duration: ${args[0]}`);
+    message.channel.send(`🔇 ${target.user.tag} muted`);
+    await sendLog(message, "Mute", args[0]);
 
     setTimeout(async () => {
       const data = await RoleBackup.findOne({ userId: target.id, guildId: message.guild.id });
@@ -209,7 +217,7 @@ client.on("messageCreate", async (message) => {
     if (!target) return;
 
     const data = await RoleBackup.findOne({ userId: target.id, guildId: message.guild.id });
-    if (!data) return message.reply("❌ No backup");
+    if (!data) return;
 
     await target.roles.set(data.roles).catch(()=>{});
     await RoleBackup.deleteOne({ userId: target.id });
@@ -219,36 +227,12 @@ client.on("messageCreate", async (message) => {
 
   // 🧹 PURGE
   if (cmd === "purge") {
-    let type = args[0];
-    let amount = parseInt(args[1]) || parseInt(args[0]);
-
+    const amount = parseInt(args[0]);
     if (!amount) return;
 
-    let deleted = 0;
-
-    while (deleted < amount) {
-      const fetch = await message.channel.messages.fetch({ limit: 100 });
-
-      let filtered;
-
-      if (type === "bots") {
-        filtered = fetch.filter(m => m.author.bot).first(100);
-      } else if (message.mentions.users.first()) {
-        const user = message.mentions.users.first();
-        filtered = fetch.filter(m => m.author.id === user.id).first(100);
-      } else {
-        filtered = fetch.first(100);
-      }
-
-      if (!filtered.length) break;
-
-      await message.channel.bulkDelete(filtered, true);
-      deleted += filtered.length;
-
-      await new Promise(r => setTimeout(r, 500));
-    }
-
-    message.channel.send(`🧹 Deleted ${deleted} messages`);
+    const messages = await message.channel.bulkDelete(amount, true);
+    message.channel.send(`🧹 Deleted ${messages.size}`);
+    await sendLog(message, "Purge", `Deleted ${messages.size} messages`);
   }
 
   // 💤 AFK
@@ -269,7 +253,7 @@ client.on("messageCreate", async (message) => {
     const limit = parseInt(args[0]);
     const interval = ms(args[1]);
 
-    if (!limit || !interval) return message.reply("Usage: !setspam 5 5s");
+    if (!limit || !interval) return;
 
     await SpamConfig.findOneAndUpdate(
       { guildId: message.guild.id },
@@ -277,28 +261,21 @@ client.on("messageCreate", async (message) => {
       { upsert: true }
     );
 
-    message.channel.send(`✅ Spam set to ${limit} messages / ${args[1]}`);
+    message.channel.send(`✅ Spam set`);
   }
 
   // 📜 HELP
   if (cmd === "help") {
-    const embed = new EmbedBuilder()
-      .setTitle("📜 Commands")
-      .setColor("Blue")
-      .setDescription(`
+    message.channel.send(`
 ⚠️ !warn @user
 🧹 !clearwarn @user
 🔇 !mute @user 10m
 🔊 !unmute @user
 🧹 !purge 100
-🤖 !purge bots 100
-👤 !purge @user 100
 💤 !afk reason
 🛑 !setspam 5 5s
 📜 !help
 `);
-
-    message.channel.send({ embeds: [embed] });
   }
 });
 
