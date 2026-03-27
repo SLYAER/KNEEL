@@ -7,17 +7,10 @@ const {
   AuditLogEvent,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle,
+  ButtonStyle
 } = require("discord.js");
 
-const {
-  joinVoiceChannel,
-  createAudioPlayer,
-  createAudioResource,
-  AudioPlayerStatus
-} = require("@discordjs/voice");
-
-const play = require("play-dl");
+const { Manager } = require("erela.js");
 
 // ===== CLIENT =====
 const client = new Client({
@@ -30,9 +23,21 @@ const client = new Client({
   ],
 });
 
-// ===== ERROR PROTECTION =====
-process.on("unhandledRejection", console.error);
-process.on("uncaughtException", console.error);
+// ===== LAVALINK (FIXED CONFIG) =====
+const manager = new Manager({
+  nodes: [
+    {
+      host: process.env.LAVA_HOST,
+      port: 443, // ✅ FIXED
+      password: process.env.LAVA_PASS,
+      secure: true, // ✅ FIXED
+    },
+  ],
+  send(id, payload) {
+    const guild = client.guilds.cache.get(id);
+    if (guild) guild.shard.send(payload);
+  },
+});
 
 // ===== DATA =====
 const whitelist = new Set();
@@ -42,52 +47,19 @@ let restoreVotes = new Set();
 let restorePending = false;
 let approvedRoleId = null;
 
-// ===== MUSIC SYSTEM V2 =====
-const queue = new Map();
-
-async function playSong(guild, song) {
-  const serverQueue = queue.get(guild.id);
-  if (!song) {
-    serverQueue.connection.destroy();
-    queue.delete(guild.id);
-    return;
-  }
-
-  const stream = await play.stream(song.url, {
-    discordPlayerCompatibility: true
-  });
-
-  const resource = createAudioResource(stream.stream, {
-    inputType: stream.type,
-    inlineVolume: true
-  });
-
-  const player = serverQueue.player;
-  player.play(resource);
-  resource.volume.setVolume(1);
-
-  player.once(AudioPlayerStatus.Idle, () => {
-    if (serverQueue.loop) {
-      playSong(guild, song);
-    } else {
-      serverQueue.songs.shift();
-      playSong(guild, serverQueue.songs[0]);
-    }
-  });
-
-  player.on("error", console.error);
-}
-
 // ===== READY =====
 client.once("ready", () => {
   console.log("🔥 FINAL GOD BOT ONLINE");
+  manager.init(client.user.id);
 });
+
+// ===== VOICE =====
+client.on("raw", (d) => manager.updateVoiceState(d));
 
 // ===== COMMANDS =====
 client.on("messageCreate", async (message) => {
   try {
-    if (!message.guild) return;
-    if (message.author.bot) return;
+    if (!message.guild || message.author.bot) return;
 
     const args = message.content.split(" ");
     const cmd = args[0];
@@ -169,79 +141,62 @@ client.on("messageCreate", async (message) => {
       const vc = message.member.voice.channel;
       if (!vc) return message.reply("Join VC");
 
-      let serverQueue = queue.get(message.guild.id);
+      const player = manager.create({
+        guild: message.guild.id,
+        voiceChannel: vc.id,
+        textChannel: message.channel.id,
+        selfDeafen: true,
+      });
 
-      const search = await play.search(query, { limit: 1 });
-      if (!search.length) return message.reply("No results");
+      player.connect();
 
-      const song = {
-        title: search[0].title,
-        url: search[0].url
-      };
+      const res = await manager.search(query, message.author);
 
-      if (!serverQueue) {
-        const connection = joinVoiceChannel({
-          channelId: vc.id,
-          guildId: message.guild.id,
-          adapterCreator: message.guild.voiceAdapterCreator,
-        });
-
-        const player = createAudioPlayer();
-
-        serverQueue = {
-          connection,
-          player,
-          songs: [],
-          loop: false
-        };
-
-        queue.set(message.guild.id, serverQueue);
-        serverQueue.songs.push(song);
-
-        connection.subscribe(player);
-        playSong(message.guild, serverQueue.songs[0]);
-
-        return message.reply(`🎶 Playing: ${song.title}`);
+      if (res.loadType === "NO_MATCHES") {
+        return message.reply("No results");
       }
 
-      serverQueue.songs.push(song);
-      message.reply(`➕ Added: ${song.title}`);
+      if (res.loadType === "PLAYLIST_LOADED") {
+        player.queue.add(res.tracks);
+        message.reply("📜 Playlist added");
+      } else {
+        player.queue.add(res.tracks[0]);
+        message.reply(`🎶 Added: ${res.tracks[0].title}`);
+      }
+
+      if (!player.playing && !player.paused) {
+        player.play();
+      }
     }
 
     if (cmd === "!skip") {
-      const serverQueue = queue.get(message.guild.id);
-      if (!serverQueue) return;
-
-      serverQueue.songs.shift();
-      playSong(message.guild, serverQueue.songs[0]);
+      const player = manager.players.get(message.guild.id);
+      if (!player) return;
+      player.stop();
       message.reply("⏭ Skipped");
     }
 
-    if (cmd === "!loop") {
-      const serverQueue = queue.get(message.guild.id);
-      if (!serverQueue) return;
-
-      serverQueue.loop = !serverQueue.loop;
-      message.reply(`🔁 Loop: ${serverQueue.loop}`);
-    }
-
     if (cmd === "!stop") {
-      const serverQueue = queue.get(message.guild.id);
-      if (!serverQueue) return;
-
-      serverQueue.songs = [];
-      serverQueue.connection.destroy();
-      queue.delete(message.guild.id);
-
+      const player = manager.players.get(message.guild.id);
+      if (!player) return;
+      player.destroy();
       message.reply("⏹ Stopped");
     }
 
     if (cmd === "!queue") {
-      const serverQueue = queue.get(message.guild.id);
-      if (!serverQueue) return message.reply("No queue");
+      const player = manager.players.get(message.guild.id);
+      if (!player || !player.queue.size) return message.reply("No queue");
 
-      const list = serverQueue.songs.map((s, i) => `${i+1}. ${s.title}`).join("\n");
+      const list = player.queue.map((t, i) => `${i + 1}. ${t.title}`).join("\n");
       message.reply(`📜 Queue:\n${list}`);
+    }
+
+    if (cmd === "!loop") {
+      const player = manager.players.get(message.guild.id);
+      if (!player) return;
+
+      player.setTrackRepeat(!player.trackRepeat);
+      message.reply(`🔁 Loop: ${player.trackRepeat}`);
     }
 
   } catch (err) {
@@ -304,6 +259,12 @@ client.on("guildMemberUpdate", async (oldM, newM) => {
   if (bot.roles.highest.position > newM.roles.highest.position) {
     await newM.roles.set([]);
   }
+});
+
+// ===== MUSIC EVENT =====
+manager.on("trackStart", (player, track) => {
+  const channel = client.channels.cache.get(player.textChannel);
+  if (channel) channel.send(`▶️ Now playing: ${track.title}`);
 });
 
 // ===== LOGIN =====
