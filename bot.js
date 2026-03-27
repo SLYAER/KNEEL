@@ -1,9 +1,7 @@
 const { isBadAI } = require("./filters/aiModeration");
-const { isBadAI } = require("./filters/aiModeration");
 const { isBadWord } = require("./filters/badWords");
 const { Client, GatewayIntentBits } = require("discord.js");
 require("dotenv").config();
-
 const fs = require("fs");
 
 // 🔥 LOAD COMMANDS
@@ -24,7 +22,7 @@ const client = new Client({
   ]
 });
 
-// 🧠 AI COOLDOWN (FIXES 429)
+// 🧠 AI COOLDOWN (ANTI 429)
 const aiCooldown = new Set();
 
 function canRunAI(userId) {
@@ -41,8 +39,15 @@ client.on("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
-// 🔥 STRONG REGEX (MAIN FILTER)
-const bypassRegex = /f[\W_]*u[\W_]*c[\W_]*k/i;
+// 🔥 ULTRA STRONG BYPASS REGEX
+const bypassRegex = [
+  /f[\W_]*u[\W_]*c[\W_]*k/i,
+  /b[\W_]*i[\W_]*t[\W_]*c[\W_]*h/i,
+  /n[\W_]*i[\W_]*g[\W_]*g[\W_]*a/i,
+  /d[\W_]*i[\W_]*c[\W_]*k/i,
+  /c[\W_]*u[\W_]*n[\W_]*t/i,
+  /s[\W_]*h[\W_]*i[\W_]*t/i,
+];
 
 // 🔥 MESSAGE HANDLER
 client.on("messageCreate", async (message) => {
@@ -50,7 +55,7 @@ client.on("messageCreate", async (message) => {
 
   const content = message.content.toLowerCase();
 
-  // 🔴 BASIC FILTER
+  // 🔴 BASIC FILTER (your existing system)
   if (isBadWord(message)) {
     await message.delete().catch(() => {});
     const warn = await message.channel.send(`🚫 ${message.author}, watch your language.`);
@@ -58,27 +63,22 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // 🔴 BYPASS FILTER (handles f*ck etc)
-  if (bypassRegex.test(content)) {
+  // 🔴 BYPASS FILTER (f*ck, f@ck, etc)
+  if (bypassRegex.some(r => r.test(content))) {
     await message.delete().catch(() => {});
     const warn = await message.channel.send(`🚫 ${message.author}, bad word detected.`);
     setTimeout(() => warn.delete().catch(() => {}), 3000);
     return;
   }
 
-  // 🧠 AI ONLY FOR COMPLEX CASES (NOT EVERY MESSAGE)
+  // 🧠 AI FILTER (SMART — NO SPAM)
   try {
-    if (
-      canRunAI(message.author.id) &&
-      (
-        content.includes("*") ||
-        content.includes("idiot") ||
-        content.includes("stupid") ||
-        content.includes("kill") ||
-        content.length > 15
-      )
-    ) {
-      const bad = await isBadAI(message.content);
+    const suspicious =
+      content.length > 40 &&
+      /[*$@#0-9]/.test(content);
+
+    if (suspicious && canRunAI(message.author.id)) {
+      const bad = await isBadAI(content, message.author.id);
 
       if (bad) {
         await message.delete().catch(() => {});
@@ -90,10 +90,10 @@ client.on("messageCreate", async (message) => {
       }
     }
   } catch (err) {
-    console.error("AI skipped:", err.message);
+    console.error("⚠️ AI skipped:", err.message);
   }
 
-  // ⚙️ COMMANDS
+  // ⚙️ COMMAND HANDLER
   const prefix = "!";
   if (!message.content.startsWith(prefix)) return;
 
