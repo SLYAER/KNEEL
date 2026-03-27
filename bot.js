@@ -54,6 +54,7 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   const content = message.content.toLowerCase();
+  console.log("📩 Message:", content);
 
   // 🔴 BASIC FILTER (your existing system)
   if (isBadWord(message)) {
@@ -64,6 +65,7 @@ client.on("messageCreate", async (message) => {
   }
 
   // 🔴 BYPASS FILTER (f*ck, f@ck, etc)
+  console.log("🚫 Regex triggered");
   if (bypassRegex.some(r => r.test(content))) {
     await message.delete().catch(() => {});
     const warn = await message.channel.send(`🚫 ${message.author}, bad word detected.`);
@@ -76,8 +78,9 @@ client.on("messageCreate", async (message) => {
     const suspicious =
       content.length > 40 &&
       /[*$@#0-9]/.test(content);
-
-    if (suspicious && canRunAI(message.author.id)) {
+    console.log("🤔 Suspicious check:", suspicious);
+    
+      if (suspicious && canRunAI(message.author.id)) {
       const bad = await isBadAI(content, message.author.id);
 
       if (bad) {
