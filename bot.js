@@ -5,7 +5,7 @@ require("dotenv").config();
 
 const fs = require("fs");
 
-// 🔥 COMMANDS LOAD
+// 🔥 LOAD COMMANDS
 const commands = new Map();
 const commandFiles = fs.readdirSync("./commands").filter(file => file.endsWith(".js"));
 
@@ -23,19 +23,31 @@ const client = new Client({
   ]
 });
 
-// 🧠 AI COOLDOWN SYSTEM
+// 🧠 AI COOLDOWN SYSTEM (prevents spam + 429 errors)
 const aiCooldown = new Set();
+
+function canRunAI(userId) {
+  if (aiCooldown.has(userId)) return false;
+
+  aiCooldown.add(userId);
+  setTimeout(() => aiCooldown.delete(userId), 10000); // 10 sec cooldown
+
+  return true;
+}
 
 // 🔥 READY
 client.on("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
+// 🔥 STRONG REGEX (catches f*ck, f u c k, etc)
+const bypassRegex = /f[\W_]*u[\W_]*c[\W_]*k/i;
+
 // 🔥 MESSAGE HANDLER
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  // 🚨 BAD WORD FILTER (FAST)
+  // 🔴 BASIC WORD FILTER (your existing system)
   if (isBadWord(message)) {
     await message.delete().catch(() => {});
     const warn = await message.channel.send(`🚫 ${message.author}, watch your language.`);
@@ -43,26 +55,22 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // 🧠 AI MODERATION (SMART + RATE LIMITED)
+  // 🔴 BYPASS FILTER (NEW — catches f*ck etc)
+  if (bypassRegex.test(message.content)) {
+    await message.delete().catch(() => {});
+    const warn = await message.channel.send(`🚫 ${message.author}, bypassed bad word detected.`);
+    setTimeout(() => warn.delete().catch(() => {}), 3000);
+    return;
+  }
+
+  // 🧠 AI MODERATION (SAFE + RATE LIMITED)
   try {
-    if (aiCooldown.has(message.author.id)) return;
+    if (!canRunAI(message.author.id)) return;
 
-    const msg = message.content.toLowerCase();
+    if (message.content.length > 5) {
+      const bad = await isBadAI(message.content);
 
-    if (
-      msg.includes("*") ||
-      msg.includes("fuck") ||
-      msg.includes("shit") ||
-      msg.includes("bitch") ||
-      msg.length > 20
-    ) {
-      aiCooldown.add(message.author.id);
-
-      setTimeout(() => {
-        aiCooldown.delete(message.author.id);
-      }, 5000); // 5 sec cooldown
-
-      if (await isBadAI(message.content)) {
+      if (bad) {
         await message.delete().catch(() => {});
         const warn = await message.channel.send(`🚫 ${message.author}, inappropriate content detected.`);
         setTimeout(() => warn.delete().catch(() => {}), 3000);
