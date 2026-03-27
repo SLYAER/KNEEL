@@ -1,19 +1,17 @@
 const { addWarn, getWarns } = require("./utils/warnSystem");
-const { setLogChannel, getLogChannel } = require("./utils/logSystem");
 const { isBadAI } = require("./filters/aiModeration");
 const { isBadWord } = require("./filters/badWords");
-const { Client, GatewayIntentBits, PermissionsBitField } = require("discord.js");
+const LogConfig = require("./models/logConfig");
+
+const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder } = require("discord.js");
 require("dotenv").config();
 const fs = require("fs");
 
-// 🔥 LOAD COMMANDS
-const commands = new Map();
-const commandFiles = fs.readdirSync("./commands").filter(file => file.endsWith(".js"));
-
-for (const file of commandFiles) {
-  const command = require(`./commands/${file}`);
-  commands.set(command.name, command);
-}
+// 🔥 CONNECT MONGO
+const mongoose = require("mongoose");
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("🟢 Mongo connected"))
+  .catch(err => console.log("❌ Mongo error:", err));
 
 // 🔥 CLIENT
 const client = new Client({
@@ -29,10 +27,8 @@ const aiCooldown = new Set();
 
 function canRunAI(userId) {
   if (aiCooldown.has(userId)) return false;
-
   aiCooldown.add(userId);
   setTimeout(() => aiCooldown.delete(userId), 15000);
-
   return true;
 }
 
@@ -41,7 +37,7 @@ client.on("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
-// 🔥 REGEX FILTER
+// 🔥 REGEX
 const bypassRegex = [
   /f[\W_]*u[\W_]*c[\W_]*k/i,
   /b[\W_]*i[\W_]*t[\W_]*c[\W_]*h/i,
@@ -51,42 +47,37 @@ const bypassRegex = [
   /s[\W_]*h[\W_]*i[\W_]*t/i,
 ];
 
-// 🔥 LOG FUNCTION (DYNAMIC)
+// 🔥 FETCH LOG CHANNEL
+async function getLogChannel(guild) {
+  const data = await LogConfig.findOne({ guildId: guild.id });
+  if (!data) return null;
+  return guild.channels.cache.get(data.logChannelId);
+}
+
+// 🔥 EMBED LOG
 async function sendLog(message, reason) {
-  try {
-    const channelId = getLogChannel(message.guild.id);
-    if (!channelId) return;
+  const logChannel = await getLogChannel(message.guild);
+  if (!logChannel) return;
 
-    const logChannel = message.guild.channels.cache.get(channelId);
-    if (!logChannel) return;
+  const embed = new EmbedBuilder()
+    .setTitle("🚫 Message Deleted")
+    .setColor("Red")
+    .addFields(
+      { name: "👤 User", value: `${message.author.tag}`, inline: true },
+      { name: "📍 Channel", value: `${message.channel}`, inline: true },
+      { name: "⚠️ Reason", value: reason, inline: false },
+      { name: "💬 Message", value: message.content || "None", inline: false }
+    )
+    .setFooter({ text: `ID: ${message.author.id}` })
+    .setTimestamp();
 
-    const time = new Date().toLocaleString();
-
-    logChannel.send(
-`🚫 **Message Deleted**
-
-👤 User: ${message.author.tag}
-🆔 ID: ${message.author.id}
-
-💬 Message: ${message.content || "None"}
-
-📍 Channel: ${message.channel}
-⏰ Time: ${time}
-
-⚠️ Reason: ${reason}`
-    );
-
-  } catch (err) {
-    console.error("Log error:", err.message);
-  }
+  logChannel.send({ embeds: [embed] });
 }
 
 // 🔥 WARN SYSTEM
 async function handleWarn(message, reason) {
-  const userId = message.author.id;
-
-  getWarns(userId);
-  const count = addWarn(userId);
+  getWarns(message.author.id);
+  const count = addWarn(message.author.id);
 
   const warnMsg = await message.channel.send(
     `🚫 ${message.author}, warning ${count}/3`
@@ -96,9 +87,20 @@ async function handleWarn(message, reason) {
 
   await sendLog(message, reason);
 
+  // 🔥 AUTO MUTE
   if (count >= 3) {
     await message.member.timeout(10 * 60 * 1000).catch(()=>{});
-    message.channel.send(`🔇 ${message.author} muted (3 warnings).`);
+
+    const logChannel = await getLogChannel(message.guild);
+    if (logChannel) {
+      const embed = new EmbedBuilder()
+        .setTitle("🔇 User Muted")
+        .setColor("Orange")
+        .setDescription(`${message.author} muted (3 warnings)`)
+        .setTimestamp();
+
+      logChannel.send({ embeds: [embed] });
+    }
   }
 }
 
@@ -108,19 +110,21 @@ client.on("messageCreate", async (message) => {
 
   const content = message.content.toLowerCase();
 
-  // 🔴 FILTERS
+  // 🔴 BASIC
   if (isBadWord(message)) {
     await message.delete().catch(() => {});
     await handleWarn(message, "Basic filter");
     return;
   }
 
+  // 🔴 REGEX
   if (bypassRegex.some(r => r.test(content))) {
     await message.delete().catch(() => {});
     await handleWarn(message, "Regex filter");
     return;
   }
 
+  // 🧠 AI
   try {
     const suspicious =
       content.length > 15 &&
@@ -136,51 +140,40 @@ client.on("messageCreate", async (message) => {
       }
     }
   } catch (err) {
-    console.error("⚠️ AI skipped:", err.message);
+    console.log("AI error:", err.message);
   }
 
   // ⚙️ COMMANDS
-  const prefix = "!";
-  if (!message.content.startsWith(prefix)) return;
+  if (!content.startsWith("!")) return;
 
-  const args = message.content.slice(prefix.length).trim().split(/ +/);
-  const cmdName = args.shift().toLowerCase();
+  const args = content.slice(1).split(/ +/);
+  const cmd = args.shift();
 
-  // 🔥 SET LOG CHANNEL COMMAND
-  if (cmdName === "setlog") {
+  // 🔥 SET LOG CHANNEL
+  if (cmd === "setlog") {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return message.reply("❌ You need admin permission.");
+      return message.reply("❌ Admin only.");
     }
 
     const channel = message.mentions.channels.first();
     if (!channel) return message.reply("❌ Mention a channel.");
 
-    setLogChannel(message.guild.id, channel.id);
+    await LogConfig.findOneAndUpdate(
+      { guildId: message.guild.id },
+      { logChannelId: channel.id },
+      { upsert: true }
+    );
 
     return message.channel.send(`✅ Log channel set to ${channel}`);
   }
 
-  // 🔍 WARNS COMMAND
-  if (cmdName === "warns") {
+  // 🔍 WARNS
+  if (cmd === "warns") {
     const user = message.mentions.users.first() || message.author;
     const count = getWarns(user.id);
-
     return message.channel.send(`⚠️ ${user} has ${count} warnings.`);
-  }
-
-  const command = commands.get(cmdName);
-  if (!command) return;
-
-  try {
-    command.execute(message, args);
-  } catch (err) {
-    console.error("❌ Command error:", err);
   }
 });
 
 // 🔥 LOGIN
-client.login(process.env.TOKEN).catch(err => {
-  console.error("❌ Login failed:", err);
-});
-
-console.log("🚀 Bot file loaded");
+client.login(process.env.TOKEN);
