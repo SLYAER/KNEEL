@@ -1,20 +1,29 @@
 const OpenAI = require("openai");
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
-async function isBadAI(content) {
+async function isBadAI(text) {
   try {
-    const res = await openai.moderations.create({
+    const response = await openai.moderations.create({
       model: "omni-moderation-latest",
-      input: content
+      input: text,
     });
 
-    const flagged = res.results[0].flagged;
-    return flagged;
+    const result = response.results[0];
+
+    return (
+      result.flagged ||
+      result.categories.hate ||
+      result.categories.harassment ||
+      result.categories.sexual ||
+      result.categories.violence
+    );
   } catch (err) {
-    console.error("AI moderation error:", err);
+    console.error("❌ AI moderation error:", err.message);
+
+    // fallback so bot doesn't break
     return false;
   }
 }
