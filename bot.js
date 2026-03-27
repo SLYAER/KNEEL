@@ -1,14 +1,13 @@
-const { addWarn, getWarns } = require("./utils/warnSystem");
+const { addWarn, getWarns, resetWarns } = require("./utils/warnSystem");
 const { isBadAI } = require("./filters/aiModeration");
 const { isBadWord } = require("./filters/badWords");
 const LogConfig = require("./models/logConfig");
 
 const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder } = require("discord.js");
 require("dotenv").config();
-const fs = require("fs");
+const mongoose = require("mongoose");
 
 // 🔥 CONNECT MONGO
-const mongoose = require("mongoose");
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("🟢 Mongo connected"))
   .catch(err => console.log("❌ Mongo error:", err));
@@ -24,7 +23,6 @@ const client = new Client({
 
 // 🧠 AI COOLDOWN
 const aiCooldown = new Set();
-
 function canRunAI(userId) {
   if (aiCooldown.has(userId)) return false;
   aiCooldown.add(userId);
@@ -41,66 +39,51 @@ client.on("ready", () => {
 const bypassRegex = [
   /f[\W_]*u[\W_]*c[\W_]*k/i,
   /b[\W_]*i[\W_]*t[\W_]*c[\W_]*h/i,
-  /n[\W_]*i[\W_]*g[\W_]*g[\W_]*a/i,
   /d[\W_]*i[\W_]*c[\W_]*k/i,
   /c[\W_]*u[\W_]*n[\W_]*t/i,
   /s[\W_]*h[\W_]*i[\W_]*t/i,
 ];
 
-// 🔥 FETCH LOG CHANNEL
+// 🔥 GET LOG CHANNEL
 async function getLogChannel(guild) {
   const data = await LogConfig.findOne({ guildId: guild.id });
   if (!data) return null;
   return guild.channels.cache.get(data.logChannelId);
 }
 
-// 🔥 EMBED LOG
+// 🔥 LOG FUNCTION (FIXED)
 async function sendLog(message, reason) {
-  const logChannel = await getLogChannel(message.guild);
-  if (!logChannel) return;
+  try {
+    const logChannel = await getLogChannel(message.guild);
+    if (!logChannel) return;
 
-  const embed = new EmbedBuilder()
-    .setTitle("🚫 Message Deleted")
-    .setColor("Red")
-    .addFields(
-      { name: "👤 User", value: `${message.author.tag}`, inline: true },
-      { name: "📍 Channel", value: `${message.channel}`, inline: true },
-      { name: "⚠️ Reason", value: reason, inline: false },
-      { name: "💬 Message", value: message.content || "None", inline: false }
-    )
-    .setFooter({ text: `ID: ${message.author.id}` })
-    .setTimestamp();
+    const embed = new EmbedBuilder()
+      .setTitle("🚫 Message Deleted")
+      .setColor("Red")
+      .addFields(
+        { name: "👤 User", value: `${message.author.tag}`, inline: true },
+        { name: "📍 Channel", value: `${message.channel}`, inline: true },
+        { name: "⚠️ Reason", value: reason },
+        { name: "💬 Message", value: message.content || "None" }
+      )
+      .setTimestamp();
 
-  logChannel.send({ embeds: [embed] });
+    await logChannel.send({ embeds: [embed] });
+  } catch (err) {
+    console.log("❌ Log failed:", err.message);
+  }
 }
 
-// 🔥 WARN SYSTEM
+// 🔥 WARN HANDLER
 async function handleWarn(message, reason) {
   getWarns(message.author.id);
   const count = addWarn(message.author.id);
 
-  const warnMsg = await message.channel.send(
-    `🚫 ${message.author}, warning ${count}/3`
-  );
-
-  setTimeout(() => warnMsg.delete().catch(()=>{}), 3000);
-
+  await message.channel.send(`🚫 ${message.author}, warning ${count}/3`);
   await sendLog(message, reason);
 
-  // 🔥 AUTO MUTE
   if (count >= 3) {
     await message.member.timeout(10 * 60 * 1000).catch(()=>{});
-
-    const logChannel = await getLogChannel(message.guild);
-    if (logChannel) {
-      const embed = new EmbedBuilder()
-        .setTitle("🔇 User Muted")
-        .setColor("Orange")
-        .setDescription(`${message.author} muted (3 warnings)`)
-        .setTimestamp();
-
-      logChannel.send({ embeds: [embed] });
-    }
   }
 }
 
@@ -110,21 +93,17 @@ client.on("messageCreate", async (message) => {
 
   const content = message.content.toLowerCase();
 
-  // 🔴 BASIC
+  // 🔴 AUTO MOD
   if (isBadWord(message)) {
-    await message.delete().catch(() => {});
-    await handleWarn(message, "Basic filter");
-    return;
+    await message.delete().catch(()=>{});
+    return handleWarn(message, "Basic filter");
   }
 
-  // 🔴 REGEX
   if (bypassRegex.some(r => r.test(content))) {
-    await message.delete().catch(() => {});
-    await handleWarn(message, "Regex filter");
-    return;
+    await message.delete().catch(()=>{});
+    return handleWarn(message, "Regex filter");
   }
 
-  // 🧠 AI
   try {
     const suspicious =
       content.length > 15 &&
@@ -134,29 +113,95 @@ client.on("messageCreate", async (message) => {
       const bad = await isBadAI(content, message.author.id);
 
       if (bad) {
-        await message.delete().catch(() => {});
-        await handleWarn(message, "AI moderation");
-        return;
+        await message.delete().catch(()=>{});
+        return handleWarn(message, "AI moderation");
       }
     }
-  } catch (err) {
-    console.log("AI error:", err.message);
-  }
+  } catch {}
 
-  // ⚙️ COMMANDS
+  // 🔥 COMMANDS
   if (!content.startsWith("!")) return;
 
   const args = content.slice(1).split(/ +/);
-  const cmd = args.shift();
+  const cmd = args.shift().toLowerCase();
 
-  // 🔥 SET LOG CHANNEL
-  if (cmd === "setlog") {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return message.reply("❌ Admin only.");
+  // ❌ PERMS
+  if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
+    return message.reply("❌ Need mod perms");
+  }
+
+  const target = message.mentions.members.first();
+
+  // ⚠️ WARN
+  if (cmd === "warn") {
+    if (!target) return;
+    getWarns(target.id);
+    const count = addWarn(target.id);
+
+    message.channel.send(`⚠️ ${target.user} warned (${count}/3)`);
+
+    const logChannel = await getLogChannel(message.guild);
+    if (logChannel) {
+      logChannel.send(`⚠️ ${target.user.tag} warned by ${message.author.tag}`);
+    }
+  }
+
+  // 🧹 CLEAR WARN
+  if (cmd === "clearwarn") {
+    if (!target) return;
+    resetWarns(target.id);
+    message.channel.send(`✅ Cleared warns for ${target.user}`);
+  }
+
+  // 🔇 MUTE
+  if (cmd === "mute") {
+    const ms = require("ms");
+    const time = args[0];
+    const reason = args.slice(1).join(" ") || "No reason";
+
+    const duration = ms(time);
+    if (!duration) return;
+
+    const role = message.guild.roles.cache.find(r => r.name === "Muted");
+    if (!role) return message.reply("Create Muted role");
+
+    await target.roles.set([role]);
+
+    message.channel.send(`🔇 ${target.user} muted (${time})`);
+
+    const logChannel = await getLogChannel(message.guild);
+    if (logChannel) {
+      logChannel.send(`🔇 ${target.user.tag} muted by ${message.author.tag}\nReason: ${reason}`);
     }
 
+    setTimeout(() => {
+      target.roles.remove(role).catch(()=>{});
+    }, duration);
+  }
+
+  // 🔓 UNMUTE
+  if (cmd === "unmute") {
+    const role = message.guild.roles.cache.find(r => r.name === "Muted");
+    await target.roles.remove(role).catch(()=>{});
+    message.channel.send(`🔓 ${target.user} unmuted`);
+  }
+
+  // 📜 AUDIT LOGS
+  if (cmd === "logs") {
+    const logs = await message.guild.fetchAuditLogs({ limit: 5 });
+    const entries = logs.entries.map(e =>
+      `${e.action} - ${e.executor.tag}`
+    ).join("\n");
+
+    message.channel.send(`📜 Audit Logs:\n${entries}`);
+  }
+
+  // 🔧 SET LOG CHANNEL
+  if (cmd === "setlog") {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
+
     const channel = message.mentions.channels.first();
-    if (!channel) return message.reply("❌ Mention a channel.");
+    if (!channel) return;
 
     await LogConfig.findOneAndUpdate(
       { guildId: message.guild.id },
@@ -164,14 +209,7 @@ client.on("messageCreate", async (message) => {
       { upsert: true }
     );
 
-    return message.channel.send(`✅ Log channel set to ${channel}`);
-  }
-
-  // 🔍 WARNS
-  if (cmd === "warns") {
-    const user = message.mentions.users.first() || message.author;
-    const count = getWarns(user.id);
-    return message.channel.send(`⚠️ ${user} has ${count} warnings.`);
+    message.channel.send(`✅ Log channel set`);
   }
 });
 
