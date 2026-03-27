@@ -1,6 +1,7 @@
 {
   "name": "kneel-saas",
-  "version": "1.0.0",
+  "version": "6.0.0",
+  "description": "Ultimate Discord Security + Music + Backup Bot (V6)",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
