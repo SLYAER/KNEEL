@@ -1,3 +1,4 @@
+console.log("🔥 BOT FILE STARTED");
 // ================== IMPORTS ==================
 const { addWarn, getWarns, resetWarns } = require("./utils/warnSystem");
 const { isBadWord } = require("./filters/badWords");
