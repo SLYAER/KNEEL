@@ -23,18 +23,6 @@ const client = new Client({
   ]
 });
 
-// 🧠 AI COOLDOWN SYSTEM (prevents spam + 429 errors)
-const aiCooldown = new Set();
-
-function canRunAI(userId) {
-  if (aiCooldown.has(userId)) return false;
-
-  aiCooldown.add(userId);
-  setTimeout(() => aiCooldown.delete(userId), 10000); // 10 sec cooldown
-
-  return true;
-}
-
 // 🔥 READY
 client.on("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
@@ -47,7 +35,7 @@ const bypassRegex = /f[\W_]*u[\W_]*c[\W_]*k/i;
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  // 🔴 BASIC WORD FILTER (your existing system)
+  // 🔴 BASIC WORD FILTER
   if (isBadWord(message)) {
     await message.delete().catch(() => {});
     const warn = await message.channel.send(`🚫 ${message.author}, watch your language.`);
@@ -55,7 +43,7 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // 🔴 BYPASS FILTER (NEW — catches f*ck etc)
+  // 🔴 BYPASS FILTER (f*ck etc)
   if (bypassRegex.test(message.content)) {
     await message.delete().catch(() => {});
     const warn = await message.channel.send(`🚫 ${message.author}, bypassed bad word detected.`);
@@ -63,22 +51,24 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // 🧠 AI MODERATION (SAFE + RATE LIMITED)
+  // 🧠 AI MODERATION (FORCED RUN + DEBUG)
   try {
-    if (!canRunAI(message.author.id)) return;
+    console.log("Checking AI for:", message.content);
 
-    if (message.content.length > 5) {
-      const bad = await isBadAI(message.content);
+    const bad = await isBadAI(message.content);
 
-      if (bad) {
-        await message.delete().catch(() => {});
-        const warn = await message.channel.send(`🚫 ${message.author}, inappropriate content detected.`);
-        setTimeout(() => warn.delete().catch(() => {}), 3000);
-        return;
-      }
+    console.log("AI RESULT:", bad);
+
+    if (bad) {
+      await message.delete().catch(() => {});
+      const warn = await message.channel.send(
+        `🚫 ${message.author}, inappropriate content detected.`
+      );
+      setTimeout(() => warn.delete().catch(() => {}), 3000);
+      return;
     }
   } catch (err) {
-    console.error("AI skipped:", err.message);
+    console.error("AI failed:", err.message);
   }
 
   // ⚙️ COMMAND SYSTEM
