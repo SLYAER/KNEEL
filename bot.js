@@ -36,7 +36,7 @@ const dangerousPerms = [
   PermissionsBitField.Flags.ManageGuild
 ];
 
-const WHITELIST = ["YOUR_USER_ID_HERE"];
+const WHITELIST = ["767128886990733342"];
 
 function hasDangerousPerms(permissions) {
   return dangerousPerms.some(p => permissions.has(p));
