@@ -1,3 +1,4 @@
+const { addWarn, getWarns } = require("./utils/warnSystem");
 const { isBadAI } = require("./filters/aiModeration");
 const { isBadWord } = require("./filters/badWords");
 const { Client, GatewayIntentBits } = require("discord.js");
