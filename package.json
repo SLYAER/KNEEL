@@ -14,5 +14,6 @@
     "passport": "^0.7.0",
     "passport-discord": "^0.1.4",
     "node-fetch": "^3.3.2"
+    "openai": "^4.0.0"
   }
 }
